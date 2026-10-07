@@ -1,0 +1,9 @@
+# dsh-workspace-api-key bundle patch: contributes one profile row.
+# 宿主半边（lib/index.js）包装 credentials.resolve，按「当前 agent 的
+# session.header.cwd」把 key 解析重定向到工作区专属凭据 ref，并注册
+# /wsk-api 路由供配置页读写；浏览器半边（lib/client.js）通过
+# exports["./client"] 与 package.json 的 dsh.client 声明加载。
+
+- insert:
+    - id: dsh-workspace-api-key
+      name: 'dsh-workspace-api-key'

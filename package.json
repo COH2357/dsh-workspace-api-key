@@ -1,0 +1,54 @@
+{
+  "name": "dsh-workspace-api-key",
+  "version": "0.1.0",
+  "description": "A DeepSeek Harness plugin that binds a separate DeepSeek API key to each workspace, so the spend of one key stays with the sessions that ran in that workspace.",
+  "type": "module",
+  "license": "MIT",
+  "author": "COH2357",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/COH2357/dsh-workspace-api-key.git"
+  },
+  "bugs": {
+    "url": "https://github.com/COH2357/dsh-workspace-api-key/issues"
+  },
+  "homepage": "https://github.com/COH2357/dsh-workspace-api-key#readme",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "api-key",
+    "workspace",
+    "credentials",
+    "billing"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ]
+    }
+  },
+  "files": [
+    "cordis.patch.yml",
+    "lib/index.js",
+    "lib/client.js"
+  ],
+  "scripts": {
+    "test": "node test/host.test.mjs && node test/client.test.mjs"
+  }
+}
