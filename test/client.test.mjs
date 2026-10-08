@@ -264,6 +264,8 @@ let clientOnlyIds = null
 let sessionsServiceReady = true
 /** true = 宿主行里混进子代理会话（模拟还没过滤的旧宿主半边）。 */
 let hostSubagentRows = false
+/** true = 宿主行里混进「空会话」（建了但一句话都没发过的会话）。 */
+let hostBlankRows = false
 const sessionStore = {
   current: 'session-1',
   listeners: new Set(),
@@ -432,6 +434,14 @@ function snapshot() {
             { cwd: WS_A, updatedAt: 30, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
           origin: 'subagent',
           parentSessionId: 'session-1',
+        }]
+      : []),
+    // 空会话：侧栏只会显示当前选中的那一个，其余都不显示。
+    ...(hostBlankRows
+      ? [{
+          ...mkSession('blank-1', '新会话', 'deepseek-official', 'deepseek-flash',
+            { cwd: WS_A, updatedAt: 40, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
+          blank: true,
         }]
       : []),
   ] : []
@@ -927,6 +937,31 @@ check('展开后没有子代理会话', !textOf(tree).includes('fact-checking'),
 check('展开后父会话仍在', textOf(tree).includes('会话一') && textOf(tree).includes('会话二'), textOf(tree).slice(0, 900))
 hostSubagentRows = false
 clientSessions = true
+await mount(page)
+
+console.log('\n[28] 空会话只保留当前选中的那个（侧栏语义）')
+hostBlankRows = true
+clientExtraSessions = [
+  { id: 'blank-1', title: '新会话', cwd: WS_A, updatedAt: 40, blank: true, retainedBy: { mainView: 0 } },
+]
+sessionStore.current = 'session-1'
+await mount(page)
+check('诊断行报告已跳过空会话', textOf(tree).includes('已跳过 1 个空会话'), textOf(tree).slice(-300))
+check('alpha 的会话数不算空会话（2 个）', findButton(tree, '会话 2') !== undefined, textOf(tree).slice(0, 700))
+click(findButton(tree, '会话 2'))
+check('展开后没有空会话', !textOf(tree).includes('新会话'), textOf(tree).slice(0, 900))
+// 用户新建会话（空会话成为当前会话）时，它应该出现在面板里，方便先给它绑 key。
+sessionStore.current = 'blank-1'
+clientExtraSessions = [
+  { id: 'blank-1', title: '新会话', cwd: WS_A, updatedAt: 40, blank: true, retainedBy: { mainView: 1 } },
+]
+await mount(page)
+check('当前空会话会列出来（会话 3）', findButton(tree, '会话 3') !== undefined, textOf(tree).slice(0, 700))
+click(findButton(tree, '会话 3'))
+check('展开后能看到当前空会话', textOf(tree).includes('新会话'), textOf(tree).slice(0, 900))
+hostBlankRows = false
+clientExtraSessions = []
+sessionStore.current = 'session-1'
 await mount(page)
 
 console.log(`\n${checks - failures}/${checks} 通过`)
