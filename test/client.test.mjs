@@ -260,6 +260,8 @@ let clientSessions = true
 let clientExtraSessions = []
 /** 只暴露这些 id（模拟「浏览器端只认识一部分会话」）。 */
 let clientOnlyIds = null
+/** false = 客户端 sessions 服务尚未提供（apply 之后才由别的插件给出）。 */
+let sessionsServiceReady = true
 const sessionStore = {
   current: 'session-1',
   listeners: new Set(),
@@ -307,7 +309,7 @@ const ctx = {
       }
     }
     if (name === 'layout') return layoutAvailable ? layout : undefined
-    if (name === 'sessions') return { list: sessionStore }
+    if (name === 'sessions') return sessionsServiceReady ? { list: sessionStore } : undefined
     return undefined
   },
   effect(fn) {
@@ -876,6 +878,30 @@ check('展开后既有宿主的「会话一」也有浏览器端的「会话二�
   textOf(tree).includes('会话一') && textOf(tree).includes('会话二'), textOf(tree).slice(0, 900))
 clientOnlyIds = null
 await mount(page)
+
+console.log('\n[25] 会话列表服务晚于插件提供 → 面板重试直到拿到')
+sessionsServiceReady = false
+clientOnlyIds = null
+sessionListAvailable = true
+await mount(page)
+check('服务缺失时诊断行报告浏览器端 0 个会话', textOf(tree).includes('浏览器会话列表：0 个'), textOf(tree).slice(-300))
+sessionsServiceReady = true
+await new Promise((resolve) => setTimeout(resolve, 700))
+check('重试后浏览器端会话进入诊断行', textOf(tree).includes('浏览器会话列表：3 个'), textOf(tree).slice(-300))
+click(findButton(tree, '会话 2'))
+check('重试后展开能看到浏览器端标题（会话一）', textOf(tree).includes('会话一'), textOf(tree).slice(0, 900))
+
+console.log('\n[26] 覆盖层晚于插件提供：重试后仍会提醒')
+sessionsServiceReady = false
+sessionStore.current = 'session-2'
+await mountOverlay(overlay)
+check('服务缺失时不弹提醒（也不报错）', textOf(overlayTree) === '', textOf(overlayTree))
+const checksBeforeRetry = calls.filter((c) => c.path.startsWith('/check')).length
+sessionsServiceReady = true
+await new Promise((resolve) => setTimeout(resolve, 700))
+check('重试后弹出「进入会话」提醒', textOf(overlayTree).includes('可能不匹配'), textOf(overlayTree).slice(0, 400))
+check('重试后确实发出了新的 /check',
+  calls.filter((c) => c.path.startsWith('/check')).length > checksBeforeRetry, String(checksBeforeRetry))
 
 console.log(`\n${checks - failures}/${checks} 通过`)
 if (failures > 0) {

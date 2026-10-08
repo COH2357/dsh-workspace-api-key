@@ -36,7 +36,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - 自己的账本（哪一层对应哪个 ref、失效标记、key 是给哪个服务商记的）落在 `$DSH_HOME/storages/dsh-workspace-api-key.json`；
 - 通过 `agent/request-error` waterfall 观察失败，但**从不**返回 `{kind: 'retry'}`——只记录判定结果并 `next()` 放行。
 
-浏览器半边（`lib/client.js`）注册到 `sidebar.panellist` 槽（`order: 1`）、`main` 槽（key 为 `workspace-api-key`）与 `shell.overlay` 槽（点进会话时的提醒），和 `dsh-skill-mcp-panel`、`dsh-429-guard` 用的是同一套槽。全部是朴素的 `React.createElement`，没有构建步骤，也不打包任何依赖。它会把宿主行与浏览器端 `sessions` 存储（`ctx.get('sessions').list.getSnapshot()`，也就是侧栏自己渲染的数据）合并起来，因此标题取自 `displayTitle`，宿主列不出会话时面板也照样有会话可列。覆盖层向 `/wsk-api/check?sessionId=…&path=…` 查询当前占据主视图的会话，每个会话最多问一次，它的按钮只负责把你带到面板——改 key 只能由面板里的操作完成。
+浏览器半边（`lib/client.js`）注册到 `sidebar.panellist` 槽（`order: 1`）、`main` 槽（key 为 `workspace-api-key`）与 `shell.overlay` 槽（点进会话时的提醒），和 `dsh-skill-mcp-panel`、`dsh-429-guard` 用的是同一套槽。全部是朴素的 `React.createElement`，没有构建步骤，也不打包任何依赖。它会把宿主行与浏览器端 `sessions` 存储（`ctx.get('sessions').list.getSnapshot()`，也就是侧栏自己渲染的数据）合并起来，因此标题取自 `displayTitle`，浏览器端只认识一部分会话时也不会把宿主行挤掉，宿主列不出会话时面板也照样有会话可列。这个存储由 `dsh-api-session-controller` 在插件 `apply()` **之后**才提供，所以面板与覆盖层都会为它重试（每 500ms 一次，最多 40 次），而不是首次渲染拿不到就放弃。覆盖层向 `/wsk-api/check?sessionId=…&path=…` 查询当前占据主视图的会话，每个会话最多问一次，它的按钮只负责把你带到面板——改 key 只能由面板里的操作完成。
 
 ### HTTP 接口（仅限回环）
 
@@ -72,10 +72,10 @@ pnpm add "dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key"
 
 ```sh
 node test/host.test.mjs     # 125 条断言
-node test/client.test.mjs   # 124 条断言
+node test/client.test.mjs   # 130 条断言
 ```
 
-两个套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`sessions`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘，以及会话探针（含 `{items}` 信封与 live 兜底）。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、宿主列不出会话时从浏览器端存储恢复会话（标题取 `displayTitle`、隐藏子代理会话）、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。
+两个套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`sessions`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘，以及会话探针（含 `{items}` 信封与 live 兜底）。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、宿主列不出会话时从浏览器端存储恢复会话（标题取 `displayTitle`、隐藏子代理会话、浏览器端只认识一部分会话时不挤掉宿主行）、会话列表服务晚于插件提供时的重试、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。
 
 ## 要求与限制
 
