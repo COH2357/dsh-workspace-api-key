@@ -32,6 +32,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - 由每一层派生出稳定的 ref —— 工作区是 `DEEPSEEK_API_KEY_WS_<sha1(规范化路径) 前 16 位十六进制大写>`，会话是 `DEEPSEEK_API_KEY_SS_<sha1(会话 id) 前 16 位十六进制大写>`（会话 id 含 `-`，不能直接当 ref 名）——通过凭据服务写入 key，并返回这个 ref 的值；
 - 只改写 provider 真正会读的 ref：默认 ref、每个适配器配置的 `apiKeyEnv`，以及插件自己生成的 ref；其它 ref 原样透传；
 - 会话列表来自 `sessionController` 服务（`list()`），所以面板显示的标题与模型投影和侧栏一致；该服务缺失时自动降级为只能按工作区配置；
+- `/wsk-api/state` 会带上插件自身版本与会话探针（`available`、`count`、`withoutCwd`、`samples`、`error`，以及工作区路径样本），面板据此说明**为什么**没有列出会话：宿主半边是旧版本（只刷新了页面而没重启应用）、没有 `sessionController`、`list()` 抛错，还是会话的 `cwd` 与任何工作区路径都对不上；
 - 自己的账本（哪一层对应哪个 ref、失效标记、key 是给哪个服务商记的）落在 `$DSH_HOME/storages/dsh-workspace-api-key.json`；
 - 通过 `agent/request-error` waterfall 观察失败，但**从不**返回 `{kind: 'retry'}`——只记录判定结果并 `next()` 放行。
 
@@ -70,8 +71,8 @@ pnpm add "dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key"
 ## 测试
 
 ```sh
-node test/host.test.mjs     # 94 条断言
-node test/client.test.mjs   # 94 条断言
+node test/host.test.mjs     # 111 条断言
+node test/client.test.mjs   # 106 条断言
 ```
 
 两个套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。
@@ -85,6 +86,7 @@ node test/client.test.mjs   # 94 条断言
 - key 通过凭据服务存放在 `$DSH_HOME/.credentials.yaml` 的 `refs:` 里，明文，和默认 key 完全一样。它不会被写进会话日志、插件状态文件或插件目录。
 - 匹配是规范化之后的文本比较。如果某个会话的 `cwd` 是指向已注册工作区路径的符号链接或 junction，则匹配不上，会走上层层级。
 - 卸载插件不会删除已生成的 `*_WS_*` / `*_SS_*` ref，可在「设置 → 模型」里清掉。
+- 如果面板列出了工作区却没有可展开的会话，请看面板底部的诊断行。出现红色「宿主端插件还是旧版本」横幅，说明 DSH 进程没有重启过：宿主半边只在启动时加载，关窗口和刷新页面都不算——请完全退出 DSH Desktop 再打开。其余情况诊断行会写明宿主看到多少个会话；一个都对不上时，还会并排给出会话 `cwd` 样本与工作区路径样本，便于比对。
 
 ## 许可
 

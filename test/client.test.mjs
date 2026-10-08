@@ -347,6 +347,11 @@ let invalid = {
 }
 const defaultConfigured = true
 let sessionListAvailable = true
+// 诊断相关开关：模拟「宿主半边是旧版本」、/state 的 sessionProbe 变体、
+// 以及「拿到了会话但一个都对不上工作区」。
+let staleHost = false
+let probeOverride = null
+let mapSessions = true
 
 /** 会话行形状对齐 lib/index.js 的 sessionRow（字段名与层级语义一致）。 */
 function mkSession(sessionId, title, provider, model, opts) {
@@ -399,15 +404,20 @@ function snapshot() {
   })
   const alpha = workspace('w-a', WS_A, 'alpha', REF_A, aConfigured, MASK_WS_A, 'deepseek-official')
   // 宿主拿不到会话服务时会话数组就是空的（界面据此降级）。
-  alpha.sessions = sessionListAvailable ? [
+  alpha.sessions = sessionListAvailable && mapSessions ? [
     mkSession('session-1', '会话一', 'deepseek-official', 'deepseek-flash',
       { cwd: WS_A, updatedAt: 9, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
     mkSession('session-2', '会话二', 'other-provider', 'gpt-x',
       { cwd: WS_A, updatedAt: 8, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
   ] : []
-  return {
+  const out = {
     ok: true,
+    pluginVersion: '0.2.1',
     storeVersion: 2,
+    sessionProbe: sessionListAvailable
+      ? { available: true, count: 4, withoutCwd: 1, samples: [WS_A, DIR_U] }
+      : { available: false, count: 0, withoutCwd: 0, samples: [] },
+    workspacePathSample: [WS_A, WS_B],
     defaultRef: { ref: 'DEEPSEEK_API_KEY', configured: defaultConfigured, source: 'file', writable: true, keyMasked: MASK_DEFAULT },
     providers: ['deepseek-official', 'other-provider'],
     sessionListAvailable,
@@ -417,7 +427,7 @@ function snapshot() {
     ],
     ungrouped: [
       { ...workspace(undefined, DIR_U, 'loose', REF_U, false, undefined, undefined), kind: 'directory',
-        sessions: sessionListAvailable ? [ mkSession('session-3', '会话三', 'deepseek-official', 'deepseek-flash',
+        sessions: sessionListAvailable && mapSessions ? [ mkSession('session-3', '会话三', 'deepseek-official', 'deepseek-flash',
           { cwd: DIR_U, updatedAt: 3, wsConfigured: false, wsRef: REF_U }) ] : [] },
     ],
     sessionOverrides: overrides[REF_S1] !== undefined
@@ -426,6 +436,16 @@ function snapshot() {
       : [],
     statePath: 'C:\\Users\\x\\.dsh\\storages\\dsh-workspace-api-key.json',
   }
+  if (staleHost) {
+    // 0.1.0 的宿主只回这些字段：没有 storeVersion / pluginVersion / sessionProbe /
+    // ungrouped，工作区行也没有 sessions。
+    for (const key of ['storeVersion', 'pluginVersion', 'sessionProbe', 'sessionListAvailable', 'ungrouped', 'workspacePathSample']) {
+      delete out[key]
+    }
+    for (const ws of out.workspaces) delete ws.sessions
+  }
+  if (probeOverride !== null) out.sessionProbe = probeOverride
+  return out
 }
 
 /** /check 的响应形状对齐 lib/index.js 的 checkSession。 */
@@ -750,6 +770,37 @@ await mount(page)
 check('提示只能按工作区配置', textOf(tree).includes('只能按工作区配置 key'), textOf(tree).slice(0, 400))
 check('没有会话开关按钮', findButton(tree, '会话 2') === undefined)
 sessionListAvailable = true
+
+console.log('\n[19] 宿主半边是旧版本时给出明确提示')
+staleHost = true
+await mount(page)
+check('提示宿主插件是旧版本', textOf(tree).includes('宿主端插件还是旧版本'), textOf(tree).slice(0, 400))
+check('提示要完全退出应用（不是刷新页面）', textOf(tree).includes('完全退出'), textOf(tree).slice(0, 400))
+check('诊断行写明宿主是旧版', textOf(tree).includes('旧版（未重启应用）'), textOf(tree).slice(-400))
+check('旧版宿主下仍然列出工作区', textOf(tree).includes('alpha'))
+staleHost = false
+
+console.log('\n[20] 宿主报告 0 个会话 / list() 报错时的诊断')
+probeOverride = { available: true, count: 0, withoutCwd: 0, samples: [] }
+mapSessions = false
+await mount(page)
+check('提示 0 个会话', textOf(tree).includes('宿主报告 0 个会话'), textOf(tree).slice(0, 400))
+check('诊断行显示会话列表 0 个', textOf(tree).includes('会话列表：0 个'), textOf(tree).slice(-400))
+probeOverride = { available: true, count: 0, withoutCwd: 0, samples: [], error: 'sessionController.list is not a function' }
+await mount(page)
+check('list() 报错显示在诊断行', textOf(tree).includes('sessionController.list is not a function'), textOf(tree).slice(-400))
+
+console.log('\n[21] 拿到了会话但一个都对不上工作区')
+probeOverride = null
+mapSessions = false
+await mount(page)
+check('提示路径对不上', textOf(tree).includes('没有一个能对上工作区'), textOf(tree).slice(0, 400))
+check('给出会话 cwd 样本', textOf(tree).includes('会话 cwd 样本'), textOf(tree).slice(0, 600))
+check('给出工作区路径样本', textOf(tree).includes('工作区路径样本'), textOf(tree).slice(0, 600))
+mapSessions = true
+await mount(page)
+check('恢复后不再显示诊断横幅', !textOf(tree).includes('没有一个能对上工作区'), textOf(tree).slice(0, 400))
+check('底部诊断行始终显示版本', textOf(tree).includes('插件 v0.2.1'), textOf(tree).slice(-400))
 
 console.log(`\n${checks - failures}/${checks} 通过`)
 if (failures > 0) {

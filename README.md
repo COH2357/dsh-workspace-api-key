@@ -32,6 +32,7 @@ Host half (`lib/index.js`):
 - derives a stable ref per level — `DEEPSEEK_API_KEY_WS_<first 16 hex chars of sha1(normalized path), upper-cased>` for a workspace and `DEEPSEEK_API_KEY_SS_<first 16 hex chars of sha1(session id), upper-cased>` for a session (a session id contains `-` and cannot be a ref name) — writes the key through the credentials service, and serves that ref's value;
 - rewrites only refs a provider actually reads: the default ref, every adapter's configured `apiKeyEnv`, and its own generated refs. Every other ref passes through untouched;
 - builds the session list from the `sessionController` service (`list()`), so the panel shows the same titles and model projections the sidebar does, and degrades to per-workspace only when that service is absent;
+- reports its own version and a session probe (`available`, `count`, `withoutCwd`, `samples`, `error`, plus sample workspace paths) in `/wsk-api/state`, so the panel can say *why* no sessions are listed: a stale host half (only a page reload instead of an app restart), a missing `sessionController`, a throwing `list()`, or a `cwd` that matches no workspace path;
 - keeps its own bookkeeping (which level maps to which ref, invalid flags, the provider a key was recorded for) in `$DSH_HOME/storages/dsh-workspace-api-key.json`;
 - observes failures through the `agent/request-error` waterfall without ever returning `{kind: 'retry'}` — it only records the verdict and calls `next()`.
 
@@ -41,7 +42,7 @@ The browser half (`lib/client.js`) registers into the `sidebar.panellist` slot (
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/wsk-api/state` | default ref status, workspaces with their sessions, overrides, invalid flags |
+| GET | `/wsk-api/state` | default ref status, workspaces with their sessions, overrides, invalid flags, plugin version and session probe |
 | GET | `/wsk-api/resolve` | which level and ref the current session resolves to right now |
 | GET | `/wsk-api/check` | `?sessionId=…&path=…` — read-only verdict for one session: effective level, key, stale flag, provider mismatch, `needsAttention` |
 | POST | `/wsk-api/set` | `{scope: 'workspace' \| 'session', path \| sessionId, title, key, provider?}` binds a key; `{useDefault: true}` or an empty key clears it |
@@ -70,8 +71,8 @@ Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `p
 ## Tests
 
 ```sh
-node test/host.test.mjs     # 94 assertions
-node test/client.test.mjs   # 94 assertions
+node test/host.test.mjs     # 111 assertions
+node test/client.test.mjs   # 106 assertions
 ```
 
 Neither suite needs a running DSH process. The host suite drives `apply()` against a mock context (fake `credentials`, `workspaceRegistry`, `agents`, `sessionController`, `webServer`, stubbed `fetch`) and covers ref derivation, the session → workspace → default cascade, workspace matching, redirecting a second adapter's `apiKeyEnv`, clearing back to the default, 401/402/429/5xx classification, the loopback and origin checks, and state persistence. The client suite loads `lib/client.js` through a minimal `window.__ModuleLoader__` plus a small React runtime, renders the panel and the overlay, and asserts slot registration, the first render, session expand/collapse, per-session saving and testing, the ungrouped-directory card, the stale and mismatch prompts, the "go configure" hand-off, graceful degradation without a session list, and back-navigation when `ctx.get('layout')` only becomes available after the plugin was applied.
@@ -85,6 +86,7 @@ Neither suite needs a running DSH process. The host suite drives `apply()` again
 - Keys are stored through the credentials service in `$DSH_HOME/.credentials.yaml` under `refs:`, in plaintext, exactly like the default key. They are not written into session logs, the plugin's state file, or the plugin directory.
 - Matching is textual after normalization. If a session's `cwd` is a symlink or junction to a registered workspace path, it will not match and the level above is used.
 - Uninstalling the plugin leaves the generated `*_WS_*` / `*_SS_*` refs in the credentials file; remove them from the Models page.
+- If the panel lists workspaces but no expandable sessions, read the diagnostics line at the bottom of the panel. A red "the host half is still an older version" banner means the DSH process was never restarted: the host half is loaded once at startup, so closing the window or reloading the page is not enough — fully quit DSH Desktop and open it again. Otherwise the diagnostics line shows how many sessions the host sees and, when none of them match, sample session `cwd` values next to sample workspace paths.
 
 ## License
 

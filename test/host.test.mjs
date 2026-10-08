@@ -113,6 +113,7 @@ const sessionController = {
     return SESSION_ROWS
   },
 }
+let sessionControllerRef = sessionController
 
 const workspaceRegistry = {
   list() {
@@ -174,7 +175,7 @@ const ctx = {
       case 'webServer': return webServer
       case 'llm': return llm
       case 'settings': return settings
-      case 'sessionController': return sessionController
+      case 'sessionController': return sessionControllerRef
       default: return undefined
     }
   },
@@ -468,6 +469,12 @@ currentSession = undefined
 console.log('\n[21] /state 列出会话行、生效层级与不匹配标记')
 const snapshotBody = (await callRoute('/state', 'GET')).body
 eq('状态版本升到 2', snapshotBody.storeVersion, 2)
+check('返回插件版本（界面据此判断宿主是否已重启）', typeof snapshotBody.pluginVersion === 'string' && snapshotBody.pluginVersion.length > 0, String(snapshotBody.pluginVersion))
+eq('会话探针报告行数', snapshotBody.sessionProbe?.count, SESSION_ROWS.length)
+eq('会话探针报告可用', snapshotBody.sessionProbe?.available, true)
+check('会话探针给出 cwd 样本', Array.isArray(snapshotBody.sessionProbe?.samples) && snapshotBody.sessionProbe.samples.includes(WS_A), JSON.stringify(snapshotBody.sessionProbe?.samples))
+eq('会话探针报告没有 cwd 的行数', snapshotBody.sessionProbe?.withoutCwd, 0)
+check('返回工作区路径样本', Array.isArray(snapshotBody.workspacePathSample) && snapshotBody.workspacePathSample.includes(WS_A), JSON.stringify(snapshotBody.workspacePathSample))
 check('返回 provider 路由列表', snapshotBody.providers?.includes('deepseek-official') && snapshotBody.providers?.includes('extra-route'), JSON.stringify(snapshotBody.providers))
 const alphaRow = snapshotBody.workspaces.find((ws) => ws.title === 'alpha')
 check('alpha 下列出会话', (alphaRow?.sessions?.length ?? 0) >= 2, JSON.stringify(alphaRow?.sessions?.map((s) => s.sessionId)))
@@ -534,6 +541,32 @@ currentSession = 'session-1'
 eq('resolver 立刻回落到工作区 key', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-alpha-1234567890')
 currentCwd = undefined
 currentSession = undefined
+
+console.log('\n[26] 会话探针诊断（界面靠它解释「为什么看不到会话」）')
+SESSION_ROWS.push({ sessionId: 'session-no-cwd', updatedAt: 1, projections: { values: { title: '没有 cwd 的会话' } } })
+const withNoCwd = (await callRoute('/state', 'GET')).body
+eq('没有 cwd 的行被单独计数', withNoCwd.sessionProbe?.withoutCwd, 1)
+eq('行数把没有 cwd 的也算进去', withNoCwd.sessionProbe?.count, SESSION_ROWS.length)
+SESSION_ROWS.pop()
+
+sessionControllerRef = { async list() { throw new Error('session store is not ready') } }
+const listFailing = (await callRoute('/state', 'GET')).body
+eq('list() 抛错时报可用', listFailing.sessionProbe?.available, true)
+eq('list() 抛错时行数为 0', listFailing.sessionProbe?.count, 0)
+check('list() 抛错时带出错误文案', String(listFailing.sessionProbe?.error).includes('session store is not ready'), String(listFailing.sessionProbe?.error))
+check('list() 抛错时界面降级（会话列表为空）', (listFailing.workspaces.find((ws) => ws.title === 'alpha')?.sessions?.length ?? 0) === 0)
+
+sessionControllerRef = { list: 'not-a-function' }
+const noList = (await callRoute('/state', 'GET')).body
+eq('list 不是函数时报不可用', noList.sessionProbe?.available, false)
+eq('list 不是函数时 sessionListAvailable 也是 false', noList.sessionListAvailable, false)
+
+sessionControllerRef = undefined
+const noService = (await callRoute('/state', 'GET')).body
+eq('没有会话服务时报不可用', noService.sessionProbe?.available, false)
+eq('没有会话服务时行数为 0', noService.sessionProbe?.count, 0)
+check('没有会话服务时 /state 仍然正常返回工作区', (noService.workspaces?.filter((ws) => ws.kind === 'workspace')?.length ?? 0) === 3, String(noService.workspaces?.length))
+sessionControllerRef = sessionController
 
 // ───────────────────────────── 收尾 ─────────────────────────────
 
