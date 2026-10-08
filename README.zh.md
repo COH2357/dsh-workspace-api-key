@@ -72,7 +72,7 @@ pnpm add "dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key"
 
 ```sh
 node test/host.test.mjs     # 125 条断言
-node test/client.test.mjs   # 121 条断言
+node test/client.test.mjs   # 124 条断言
 ```
 
 两个套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`sessions`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘，以及会话探针（含 `{items}` 信封与 live 兜底）。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、宿主列不出会话时从浏览器端存储恢复会话（标题取 `displayTitle`、隐藏子代理会话）、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。

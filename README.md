@@ -72,7 +72,7 @@ Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `p
 
 ```sh
 node test/host.test.mjs     # 125 assertions
-node test/client.test.mjs   # 121 assertions
+node test/client.test.mjs   # 124 assertions
 ```
 
 Neither suite needs a running DSH process. The host suite drives `apply()` against a mock context (fake `credentials`, `workspaceRegistry`, `agents`, `sessionController`, `sessions`, `webServer`, stubbed `fetch`) and covers ref derivation, the session → workspace → default cascade, workspace matching, redirecting a second adapter's `apiKeyEnv`, clearing back to the default, 401/402/429/5xx classification, the loopback and origin checks, state persistence, and the session probe including the `{items}` envelope and the live-session fallback. The client suite loads `lib/client.js` through a minimal `window.__ModuleLoader__` plus a small React runtime, renders the panel and the overlay, and asserts slot registration, the first render, session expand/collapse, per-session saving and testing, sessions recovered from the browser-side store when the host has none (with `displayTitle` winning and subagent sessions hidden), the ungrouped-directory card, the stale and mismatch prompts, the "go configure" hand-off, graceful degradation without a session list, and back-navigation when `ctx.get('layout')` only becomes available after the plugin was applied.
