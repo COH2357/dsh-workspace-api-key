@@ -262,6 +262,8 @@ let clientExtraSessions = []
 let clientOnlyIds = null
 /** false = 客户端 sessions 服务尚未提供（apply 之后才由别的插件给出）。 */
 let sessionsServiceReady = true
+/** true = 宿主行里混进子代理会话（模拟还没过滤的旧宿主半边）。 */
+let hostSubagentRows = false
 const sessionStore = {
   current: 'session-1',
   listeners: new Set(),
@@ -423,14 +425,23 @@ function snapshot() {
       { cwd: WS_A, updatedAt: 9, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
     mkSession('session-2', '会话二', 'other-provider', 'gpt-x',
       { cwd: WS_A, updatedAt: 8, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
+    // 子代理会话：真实宿主列表里本来就有，旧版本插件没过滤时会在一个工作区里堆出几十个。
+    ...(hostSubagentRows
+      ? [{
+          ...mkSession('sub-1', '子代理：fact-checking', 'deepseek-official', 'deepseek-flash',
+            { cwd: WS_A, updatedAt: 30, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
+          origin: 'subagent',
+          parentSessionId: 'session-1',
+        }]
+      : []),
   ] : []
   const out = {
     ok: true,
     pluginVersion: '0.2.1',
     storeVersion: 2,
     sessionProbe: sessionListAvailable
-      ? { available: true, count: 4, withoutCwd: 1, samples: [WS_A, DIR_U] }
-      : { available: false, count: 0, withoutCwd: 0, samples: [] },
+      ? { available: true, count: hostSubagentRows ? 5 : 4, withoutCwd: 1, subagents: hostSubagentRows ? 1 : 0, samples: [WS_A, DIR_U] }
+      : { available: false, count: 0, withoutCwd: 0, subagents: 0, samples: [] },
     workspacePathSample: [WS_A, WS_B],
     defaultRef: { ref: 'DEEPSEEK_API_KEY', configured: defaultConfigured, source: 'file', writable: true, keyMasked: MASK_DEFAULT },
     providers: ['deepseek-official', 'other-provider'],
@@ -902,6 +913,21 @@ await new Promise((resolve) => setTimeout(resolve, 700))
 check('重试后弹出「进入会话」提醒', textOf(overlayTree).includes('可能不匹配'), textOf(overlayTree).slice(0, 400))
 check('重试后确实发出了新的 /check',
   calls.filter((c) => c.path.startsWith('/check')).length > checksBeforeRetry, String(checksBeforeRetry))
+
+console.log('\n[27] 子代理会话不列出（宿主行里混进来时也要挡住）')
+hostSubagentRows = true
+clientSessions = false
+sessionsServiceReady = true
+sessionStore.current = 'session-1'
+await mount(page)
+check('诊断行报告已跳过子代理会话', textOf(tree).includes('已跳过 1 个子代理会话'), textOf(tree).slice(-300))
+check('alpha 的会话数按父会话算（2 个）', findButton(tree, '会话 2') !== undefined, textOf(tree).slice(0, 700))
+click(findButton(tree, '会话 2'))
+check('展开后没有子代理会话', !textOf(tree).includes('fact-checking'), textOf(tree).slice(0, 900))
+check('展开后父会话仍在', textOf(tree).includes('会话一') && textOf(tree).includes('会话二'), textOf(tree).slice(0, 900))
+hostSubagentRows = false
+clientSessions = true
+await mount(page)
 
 console.log(`\n${checks - failures}/${checks} 通过`)
 if (failures > 0) {

@@ -625,6 +625,25 @@ sessionsServiceRef = {
   get: (id) => liveSessions.find((session) => session.id === id),
 }
 
+console.log('\n[28] 子代理会话不进面板（一个工作区里 13 个会话、12 个是子代理）')
+const subagentRows = [
+  ...SESSION_ROWS,
+  { sessionId: 'sub-1', cwd: WS_A, origin: 'subagent', parentSessionId: 'session-1', updatedAt: 30, projections: { values: { title: '子代理：fact-checking' } } },
+  { sessionId: 'sub-2', cwd: WS_A, parentSessionId: 'session-1', updatedAt: 29, projections: { values: { title: '子代理：no origin 字段' } } },
+]
+sessionControllerRef = { async list() { return subagentRows } }
+const filtered = (await callRoute('/state', 'GET')).body
+eq('子代理会话被单独计数', filtered.sessionProbe?.subagents, 2)
+eq('计数不含子代理会话', filtered.sessionProbe?.count, SESSION_ROWS.length)
+const alphaAfterFilter = filtered.workspaces.find((ws) => ws.title === 'alpha')?.sessions ?? []
+check('alpha 里没有子代理会话',
+  !alphaAfterFilter.some((s) => String(s.sessionId).startsWith('sub-')),
+  JSON.stringify(alphaAfterFilter.map((s) => s.sessionId)))
+check('父会话还在', alphaAfterFilter.some((s) => s.sessionId === 'session-1'), JSON.stringify(alphaAfterFilter.map((s) => s.sessionId)))
+check('过滤后的会话标题里没有子代理字样',
+  !JSON.stringify(filtered.workspaces).includes('子代理'), JSON.stringify(filtered.workspaces).slice(0, 300))
+sessionControllerRef = sessionController
+
 // ───────────────────────────── 收尾 ─────────────────────────────
 
 rmSync(TMP, { recursive: true, force: true })

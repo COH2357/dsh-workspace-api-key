@@ -31,8 +31,8 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - 把该目录与 `workspaceRegistry.list()` 做规范化后比对（绝对化、去掉尾部分隔符、Windows 折大小写）；
 - 由每一层派生出稳定的 ref —— 工作区是 `DEEPSEEK_API_KEY_WS_<sha1(规范化路径) 前 16 位十六进制大写>`，会话是 `DEEPSEEK_API_KEY_SS_<sha1(会话 id) 前 16 位十六进制大写>`（会话 id 含 `-`，不能直接当 ref 名）——通过凭据服务写入 key，并返回这个 ref 的值；
 - 只改写 provider 真正会读的 ref：默认 ref、每个适配器配置的 `apiKeyEnv`，以及插件自己生成的 ref；其它 ref 原样透传；
-- 会话列表来自 `sessionController` 服务（`list()`，会拆开它 `{items: […]}` 的信封），控件缺失 / 抛错 / 列表为空时再退到宿主 live 会话服务（`ctx.get('sessions').list()`），所以那种情况下面板仍能列出会话（该兜底会过滤掉子代理会话）；
-- `/wsk-api/state` 会带上插件自身版本与会话探针（`available`、`shape`、`source`、`count`、`withoutCwd`、`samples`、`error`，以及工作区路径样本），面板据此说明**为什么**没有列出会话：宿主半边是旧版本（只刷新了页面而没重启应用）、没有 `sessionController`、`list()` 抛错、信封形状不认识，还是会话的 `cwd` 与任何工作区路径都对不上；
+- 会话列表来自 `sessionController` 服务（`list()`，会拆开它 `{items: […]}` 的信封），控件缺失 / 抛错 / 列表为空时再退到宿主 live 会话服务（`ctx.get('sessions').list()`），所以那种情况下面板仍能列出会话；两个来源都会丢掉子代理会话（`origin: 'subagent'` 或带 `parentSession`）——持久化列表里本来就含它们，不过滤的话一个只有 1 个真实会话的工作区会列出 13 个；
+- `/wsk-api/state` 会带上插件自身版本与会话探针（`available`、`shape`、`source`、`count`、`withoutCwd`、`subagents`、`samples`、`error`，以及工作区路径样本），面板据此说明**为什么**没有列出会话：宿主半边是旧版本（只刷新了页面而没重启应用）、没有 `sessionController`、`list()` 抛错、信封形状不认识，还是会话的 `cwd` 与任何工作区路径都对不上；
 - 自己的账本（哪一层对应哪个 ref、失效标记、key 是给哪个服务商记的）落在 `$DSH_HOME/storages/dsh-workspace-api-key.json`；
 - 通过 `agent/request-error` waterfall 观察失败，但**从不**返回 `{kind: 'retry'}`——只记录判定结果并 `next()` 放行。
 
@@ -71,8 +71,8 @@ pnpm add "dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key"
 ## 测试
 
 ```sh
-node test/host.test.mjs     # 125 条断言
-node test/client.test.mjs   # 130 条断言
+node test/host.test.mjs     # 130 条断言
+node test/client.test.mjs   # 134 条断言
 ```
 
 两个套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`sessions`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘，以及会话探针（含 `{items}` 信封与 live 兜底）。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、宿主列不出会话时从浏览器端存储恢复会话（标题取 `displayTitle`、隐藏子代理会话、浏览器端只认识一部分会话时不挤掉宿主行）、会话列表服务晚于插件提供时的重试、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。
