@@ -41,6 +41,7 @@ const WS_A = 'C:\\work\\alpha'
 const WS_B = 'C:\\work\\beta'
 const WS_C = 'C:\\work\\gamma' // 没有专属 key 的工作区
 const DIR_ONLY = 'C:\\work\\loose' // 不是注册工作区，只是目录
+const DIR_BARE = 'C:\\work\\bare' // 从未配置过的目录
 
 const creds = new Map([
   ['DEEPSEEK_API_KEY', 'sk-default'],
@@ -66,9 +67,50 @@ const credentials = {
 }
 
 let currentCwd
+let currentSession
 const agents = {
   currentInitiator() {
-    return currentCwd === undefined ? undefined : { session: { header: { cwd: currentCwd } } }
+    if (currentCwd === undefined) return undefined
+    return { session: { id: currentSession, header: { cwd: currentCwd } } }
+  },
+}
+
+const SESSION_ROWS = [
+  {
+    sessionId: 'session-1',
+    cwd: WS_A,
+    updatedAt: 30,
+    running: true,
+    projections: {
+      values: {
+        title: 'alpha 的会话一',
+        modelSelection: { lastUsed: { provider: 'deepseek-official', model: 'deepseek-flash' }, next: null },
+      },
+    },
+  },
+  {
+    sessionId: 'session-2',
+    cwd: WS_A,
+    updatedAt: 20,
+    projections: {
+      values: {
+        title: 'alpha 的会话二',
+        modelSelection: { lastUsed: null, next: { provider: 'other-provider', model: 'some-model' } },
+      },
+    },
+  },
+  { sessionId: 'session-3', cwd: DIR_BARE, updatedAt: 10, projections: { values: { title: '未分组会话' } } },
+  {
+    sessionId: 'session-9',
+    cwd: WS_B,
+    updatedAt: 5,
+    projections: { values: { title: 'beta 的会话', modelSelection: { lastUsed: { provider: 'deepseek-official', model: 'deepseek-chat' } } } },
+  },
+]
+
+const sessionController = {
+  async list() {
+    return SESSION_ROWS
   },
 }
 
@@ -132,6 +174,7 @@ const ctx = {
       case 'webServer': return webServer
       case 'llm': return llm
       case 'settings': return settings
+      case 'sessionController': return sessionController
       default: return undefined
     }
   },
@@ -337,8 +380,8 @@ eq('诊断回报 override 生效', diag.body.overrideActive, true)
 
 console.log('\n[19] 测试连接：端点形状与各状态码')
 
-// 给 alpha 配一把专属 key（前面的用例可能已把它清掉）
-await callRoute('/set', 'POST', { path: WS_A, key: 'sk-alpha-1234567890' })
+// 给 alpha 配一把专属 key（前面的用例可能已把它清掉）；记下 provider 供不匹配判定用
+await callRoute('/set', 'POST', { path: WS_A, key: 'sk-alpha-1234567890', provider: 'deepseek-official' })
 
 const realFetch = globalThis.fetch
 const fetchCalls = []
@@ -390,6 +433,107 @@ const defaultTest = await callRoute('/test', 'POST', {})
 eq('默认卡片测的是默认 ref', defaultTest.body.keyTail, 'ault')
 eq('默认卡片也是真实端点', lastCall().url, 'https://api.deepseek.com/anthropic/v1/messages')
 globalThis.fetch = realFetch
+
+console.log('\n[20] 会话级覆盖：级联 session → workspace → default')
+// alpha 的工作区级 key 由 [19] 写成 sk-alpha-1234567890；再给 beta 配一把工作区级。
+await callRoute('/set', 'POST', { path: WS_B, key: 'sk-beta-workspace-1', provider: 'deepseek-official' })
+const setSession = await callRoute('/set', 'POST', {
+  scope: 'session',
+  sessionId: 'session-1',
+  path: WS_A,
+  title: 'alpha 的会话一',
+  key: 'sk-session-one-1',
+  provider: 'deepseek-official',
+})
+eq('/set 会话级返回 200', setSession.status, 200)
+const sref = setSession.body.sessionOverrides?.find((x) => x.sessionId === 'session-1')?.ref
+check('会话 ref 形如 DEEPSEEK_API_KEY_SS_<16位>', /^DEEPSEEK_API_KEY_SS_[0-9A-F]{16}$/.test(String(sref)), sref)
+check('会话级响应不含明文 key', !JSON.stringify(setSession.body).includes('sk-session-one-1'))
+
+currentCwd = WS_A
+currentSession = 'session-1'
+eq('会话有覆盖 → 用会话 key', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-session-one-1')
+eq('无关 ref 也被重定向到会话 key', (await credentials.resolve('DEEPSEEK_API_KEY_EXTRA'))?.value, 'sk-session-one-1')
+currentSession = 'session-2'
+eq('同工作区另一个会话 → 落到工作区 key', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-alpha-1234567890')
+currentCwd = WS_B
+currentSession = 'session-9'
+eq('只有工作区覆盖 → 用工作区 key', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-beta-workspace-1')
+currentCwd = DIR_BARE
+currentSession = 'session-3'
+eq('未配置的目录 → 系统默认', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-default')
+currentCwd = undefined
+currentSession = undefined
+
+console.log('\n[21] /state 列出会话行、生效层级与不匹配标记')
+const snapshotBody = (await callRoute('/state', 'GET')).body
+eq('状态版本升到 2', snapshotBody.storeVersion, 2)
+check('返回 provider 路由列表', snapshotBody.providers?.includes('deepseek-official') && snapshotBody.providers?.includes('extra-route'), JSON.stringify(snapshotBody.providers))
+const alphaRow = snapshotBody.workspaces.find((ws) => ws.title === 'alpha')
+check('alpha 下列出会话', (alphaRow?.sessions?.length ?? 0) >= 2, JSON.stringify(alphaRow?.sessions?.map((s) => s.sessionId)))
+const s1row = alphaRow.sessions.find((s) => s.sessionId === 'session-1')
+eq('会话行标出会话级生效', s1row?.level, 'session')
+eq('会话行带 key 掩码', s1row?.keyMasked, 'sk-ses…ne-1')
+eq('会话行带会话当前模型', `${s1row?.provider}/${s1row?.model}`, 'deepseek-official/deepseek-flash')
+eq('会话行标题来自投影', s1row?.title, 'alpha 的会话一')
+const s2row = alphaRow.sessions.find((s) => s.sessionId === 'session-2')
+eq('没配会话的落到工作区级', s2row?.level, 'workspace')
+eq('provider 不匹配被标出', s2row?.mismatch?.sessionProvider, 'other-provider')
+eq('不匹配时记录 key 面向的 provider', s2row?.mismatch?.keyProvider, 'deepseek-official')
+const looseRow = snapshotBody.ungrouped.find((ws) => ws.path === DIR_BARE)
+check('未注册目录里的会话也单独成组', looseRow !== undefined, JSON.stringify(snapshotBody.ungrouped?.map((w) => w.path)))
+eq('未分组会话没有工作区覆盖 → default', looseRow?.sessions?.[0]?.level, 'default')
+check('会话级覆盖有总览', (snapshotBody.sessionOverrides?.length ?? 0) === 1)
+
+console.log('\n[22] /check：进入会话前的判定（只报告，不改 key）')
+const okCheck = (await callRoute('/check?sessionId=session-1', 'GET')).body
+eq('check 认出会话', okCheck.sessionId, 'session-1')
+eq('check 报出生效层级', okCheck.level, 'session')
+eq('check 报出 key 掩码', okCheck.keyMasked, 'sk-ses…ne-1')
+eq('一切正常 → 不提醒', okCheck.needsAttention, false)
+eq('check 报出工作区级也配了', okCheck.workspaceScope?.configured, true)
+const mismatchCheck = (await callRoute('/check?sessionId=session-2', 'GET')).body
+eq('不匹配 → 需要提醒', mismatchCheck.needsAttention, true)
+eq('不匹配时仍说明会用哪把 key（不自动替换）', mismatchCheck.level, 'workspace')
+eq('不匹配保留用户选择权：不返回替换动作', mismatchCheck.mismatch?.sessionProvider, 'other-provider')
+
+console.log('\n[23] 401 请求错误 → 标到会话级覆盖上')
+for (const listener of errorListeners) {
+  await listener(
+    {
+      failure: { status: 401, message: 'Authentication Fails, invalid api key' },
+      agent: { session: { id: 'session-1', header: { cwd: WS_A } } },
+    },
+    () => 'next',
+  )
+}
+const flagged = (await callRoute('/state', 'GET')).body
+const flaggedRow = flagged.workspaces.find((ws) => ws.title === 'alpha').sessions.find((s) => s.sessionId === 'session-1')
+eq('失效标记落在会话级', flaggedRow?.invalid?.level, 'session')
+eq('失效会话仍按自己的会话级 key', flaggedRow?.level, 'session')
+const flaggedCheck = (await callRoute('/check?sessionId=session-1', 'GET')).body
+eq('失效 → 需要提醒', flaggedCheck.needsAttention, true)
+eq('失效时仍能报出 key 已配置', flaggedCheck.keyConfigured, true)
+
+console.log('\n[24] 会话级「测试连接」与自动摘掉失效标记')
+stubFetch(() => fakeRes(200, '{}'))
+const sessionTest = await callRoute('/test', 'POST', { scope: 'session', sessionId: 'session-1' })
+eq('测试会话级 key → ok', sessionTest.body.test?.verdict, 'ok')
+eq('测的是会话级那把 key', lastCall().init.headers['x-api-key'], 'sk-session-one-1')
+check('成功测试顺手摘掉失效标记', sessionTest.body.test?.unmarked !== undefined, JSON.stringify(sessionTest.body.test))
+const cleared = (await callRoute('/state', 'GET')).body
+const clearedRow = cleared.workspaces.find((ws) => ws.title === 'alpha').sessions.find((s) => s.sessionId === 'session-1')
+eq('失效标记已消失', clearedRow?.invalid, null)
+globalThis.fetch = realFetch
+
+console.log('\n[25] 会话级回退到工作区/系统（useDefault）')
+const backToWorkspace = await callRoute('/set', 'POST', { scope: 'session', sessionId: 'session-1', useDefault: true })
+eq('清掉会话级后回落到工作区级', backToWorkspace.body.sessionOverrides?.length, 0)
+currentCwd = WS_A
+currentSession = 'session-1'
+eq('resolver 立刻回落到工作区 key', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-alpha-1234567890')
+currentCwd = undefined
+currentSession = undefined
 
 // ───────────────────────────── 收尾 ─────────────────────────────
 

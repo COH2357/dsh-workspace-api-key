@@ -53,6 +53,7 @@ const h = (type, props, ...children) => {
 // 每个「组件类型」一套持久 hook 状态（真实 React 是每个实例一套；
 // 组件都是单实例，所以按类型键控足够）。
 const hookStates = new Map()
+const pendingCleanups = []
 let cursor = 0
 let forceRender = null
 let rendering = false
@@ -63,7 +64,8 @@ const React = {
   useState(initial) {
     const array = React.__current
     const index = cursor++
-    if (array.length <= index) array.push(initial)
+    // 与 React 一致：函数初值视为惰性初始化（只算一次）。
+    if (array.length <= index) array.push(typeof initial === 'function' ? initial() : initial)
     return [array[index], (value) => setAt(array, index, value)]
   },
   useRef(initial) {
@@ -87,7 +89,8 @@ const React = {
     const previous = array[index]
     if (previous === undefined || !sameDeps(previous.deps, deps)) {
       array[index] = { deps }
-      fn()
+      const cleanup = fn()
+      if (typeof cleanup === 'function') pendingCleanups.push(cleanup)
     }
     return undefined
   },
@@ -121,6 +124,14 @@ function sameDeps(a, b) {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i += 1) if (!Object.is(a[i], b[i])) return false
   return true
+}
+
+/** 卸载当前挂载的所有组件：先跑它们登记的清理函数（bridge.refresh 会在这里被注销）。 */
+function resetHooks() {
+  for (const cleanup of pendingCleanups.splice(0)) {
+    try { cleanup() } catch { /* 清理失败不影响测试 */ }
+  }
+  hookStates.clear()
 }
 
 // ─────────────────────────── 渲染器 ───────────────────────────
@@ -232,12 +243,41 @@ const client = loaded.factory(requireShim)
 check('导出 inject', Array.isArray(client.inject) && client.inject.includes('slots'), JSON.stringify(client.inject))
 check('导出 apply(ctx)', typeof client.apply === 'function')
 check('没有导出 name（宿主侧插件行由 cordis 认领）', client.name === undefined)
+// 回归保护：apply 阶段若 layout 还没就绪，旧实现会把 undefined 永久缓存下来，
+// 「返回」就变成静默空操作。所以必须声明 layout（宿主会等它就绪）＋点击时惰性取。
+check('inject 声明了 layout（否则返回键会静默失效）', client.inject.includes('layout'), JSON.stringify(client.inject))
 
 // ─────────────────────── 假 ctx + 插槽注册 ───────────────────────
 
 const registrations = []
 const registeredCtx = { injected: [], lastPanel: 'unset' }
 const layout = { selectPanel: (id) => { registeredCtx.lastPanel = id } }
+
+// 会话列表服务（客户端的 ctx.sessions）：byId[*].retainedBy.mainView 指向主视图里显示的会话。
+const sessionStore = {
+  current: 'session-1',
+  listeners: new Set(),
+  snapshotCount: 0,
+  getSnapshot() {
+    this.snapshotCount += 1
+    const main = (id) => (this.current === id ? 1 : 0)
+    return {
+      phase: 'ready',
+      byId: {
+        'session-1': { id: 'session-1', title: '会话一', cwd: WS_A, retainedBy: { mainView: main('session-1') } },
+        'session-2': { id: 'session-2', title: '会话二', cwd: WS_A, retainedBy: { mainView: main('session-2') } },
+        'session-3': { id: 'session-3', title: '会话三', cwd: DIR_U, retainedBy: { mainView: main('session-3') } },
+      },
+    }
+  },
+  subscribe(listener) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  },
+  emit() { for (const listener of [...this.listeners]) listener() },
+}
+
+let layoutAvailable = true
 
 const ctx = {
   get(name) {
@@ -254,7 +294,8 @@ const ctx = {
         },
       }
     }
-    if (name === 'layout') return layout
+    if (name === 'layout') return layoutAvailable ? layout : undefined
+    if (name === 'sessions') return { list: sessionStore }
     return undefined
   },
   effect(fn) {
@@ -266,45 +307,164 @@ const ctx = {
 client.apply(ctx)
 
 console.log('\n[1] 插槽注册')
-eq('注入了两个插槽', registeredCtx.injected.length, 2)
-check('注入 sidebar.panellist 与 main',
-  registeredCtx.injected.includes('sidebar.panellist') && registeredCtx.injected.includes('main'),
+eq('注入了三个插槽', registeredCtx.injected.length, 3)
+check('注入 sidebar.panellist / main / shell.overlay',
+  registeredCtx.injected.includes('sidebar.panellist') && registeredCtx.injected.includes('main')
+    && registeredCtx.injected.includes('shell.overlay'),
   JSON.stringify(registeredCtx.injected))
 const row = registrations.find((r) => r.options.name === 'sidebar.panellist')
 const page = registrations.find((r) => r.options.name === 'main')
+const overlay = registrations.find((r) => r.options.name === 'shell.overlay')
 eq('侧栏行 id', row?.options.id, 'workspace-api-key')
 eq('侧栏行 order（1 = 紧跟宿主「插件」行 order 0）', row?.options.order, 1)
 eq('侧栏行 label', typeof row?.options.label === 'function' ? row.options.label() : row?.options.label, 'API Key 分配')
 eq('主区页面 key 必须等于侧栏行 id', page?.options.key, row?.options.id)
 check('侧栏行有图标组件', typeof row.component === 'function')
 check('主区页面有组件', typeof page.component === 'function')
+check('覆盖层注册带 id（list 槽要求）', typeof overlay?.options.id === 'string' && overlay.options.id !== '', JSON.stringify(overlay?.options))
+check('覆盖层有组件', typeof overlay?.component === 'function')
 
 // ─────────────────────── 宿主接口打桩 ───────────────────────
 
 const WS_A = 'C:\\work\\alpha'
 const WS_B = 'C:\\work\\beta'
+const DIR_U = 'C:\\work\\loose'
 const REF_A = 'DEEPSEEK_API_KEY_WS_ABCDEF0123456789'
 const REF_B = 'DEEPSEEK_API_KEY_WS_0000000000000000'
+const REF_U = 'DEEPSEEK_API_KEY_WS_9999999999999999'
+const REF_S1 = 'DEEPSEEK_API_KEY_SS_1111111111111111'
 
-let overrides = { [REF_A]: { path: WS_A, title: 'alpha', at: '2026-01-01T00:00:00.000Z' } }
-let invalid = { [REF_A]: { at: '2026-01-02T00:00:00.000Z', status: 'invalid', message: 'Authentication Fails, invalid api key' } }
+const MASK_WS_A = 'sk-alp…cret'
+const MASK_S1 = 'sk-ses…ne-1'
+const MASK_DEFAULT = 'sk-def…ault'
+
+let overrides = {
+  [REF_A]: { ref: REF_A, scope: 'workspace', path: WS_A, title: 'alpha', provider: 'deepseek-official', at: '2026-01-01T00:00:00.000Z' },
+  [REF_S1]: { ref: REF_S1, scope: 'session', sessionId: 'session-1', path: WS_A, title: '会话一', provider: 'deepseek-official', at: '2026-01-03T00:00:00.000Z' },
+}
+let invalid = {
+  [REF_A]: { at: '2026-01-02T00:00:00.000Z', status: 'invalid', level: 'workspace', message: 'Authentication Fails, invalid api key' },
+}
 const defaultConfigured = true
+let sessionListAvailable = true
+
+/** 会话行形状对齐 lib/index.js 的 sessionRow（字段名与层级语义一致）。 */
+function mkSession(sessionId, title, provider, model, opts) {
+  const ref = sessionId === 'session-1' ? REF_S1 : `DEEPSEEK_API_KEY_SS_${sessionId.toUpperCase()}`
+  const hasOwn = overrides[ref] !== undefined
+  const wsConfigured = opts.wsConfigured === true
+  const level = hasOwn ? 'session' : wsConfigured ? 'workspace' : 'default'
+  const effectiveRef = hasOwn ? ref : opts.wsRef
+  const keyProvider = hasOwn ? overrides[ref].provider : opts.wsProvider
+  return {
+    sessionId,
+    title,
+    updatedAt: opts.updatedAt ?? 1,
+    running: false,
+    blank: false,
+    parentSessionId: undefined,
+    cwd: opts.cwd,
+    provider,
+    model,
+    ref,
+    configured: hasOwn,
+    keyMasked: hasOwn ? 'sk-ses…ne-1' : undefined,
+    overrideProvider: hasOwn ? overrides[ref].provider : undefined,
+    overrideModel: undefined,
+    level,
+    effectiveRef,
+    effectiveKeyMasked: hasOwn ? 'sk-ses…ne-1' : opts.wsKeyMasked,
+    effectiveProvider: keyProvider,
+    effectiveModel: undefined,
+    effectiveTitle: hasOwn ? overrides[ref].title : undefined,
+    invalid: invalid[effectiveRef] ?? null,
+    mismatch: keyProvider !== undefined && provider !== keyProvider
+      ? { keyProvider, sessionProvider: provider, keyModel: undefined, sessionModel: model }
+      : null,
+  }
+}
 
 function snapshot() {
-  const workspaces = [
-    { id: 'w-a', path: WS_A, title: 'alpha', kind: 'workspace', ref: REF_A,
-      configured: overrides[REF_A] !== undefined,
-      keyMasked: overrides[REF_A] !== undefined ? 'sk-alp…cret' : undefined,
-      invalid: invalid[REF_A] ?? null, exists: true },
-    { id: 'w-b', path: WS_B, title: 'beta', kind: 'workspace', ref: REF_B,
-      configured: overrides[REF_B] !== undefined, invalid: null, exists: true },
-  ]
+  const aConfigured = overrides[REF_A] !== undefined
+  const bConfigured = overrides[REF_B] !== undefined
+  const workspace = (id, path, title, ref, configured, keyMasked, provider) => ({
+    id, path, title, kind: 'workspace', ref, configured,
+    keyMasked: configured ? keyMasked : undefined,
+    source: configured ? 'file' : undefined,
+    writable: true,
+    invalid: invalid[ref] ?? null,
+    exists: true,
+    overrideProvider: configured ? provider : undefined,
+    sessions: [],
+  })
+  const alpha = workspace('w-a', WS_A, 'alpha', REF_A, aConfigured, MASK_WS_A, 'deepseek-official')
+  // 宿主拿不到会话服务时会话数组就是空的（界面据此降级）。
+  alpha.sessions = sessionListAvailable ? [
+    mkSession('session-1', '会话一', 'deepseek-official', 'deepseek-flash',
+      { cwd: WS_A, updatedAt: 9, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
+    mkSession('session-2', '会话二', 'other-provider', 'gpt-x',
+      { cwd: WS_A, updatedAt: 8, wsConfigured: aConfigured, wsRef: REF_A, wsProvider: 'deepseek-official', wsKeyMasked: MASK_WS_A }),
+  ] : []
   return {
     ok: true,
-    defaultRef: { ref: 'DEEPSEEK_API_KEY', configured: defaultConfigured, source: 'file',
-      writable: true, keyMasked: 'sk-def…ault' },
-    workspaces,
+    storeVersion: 2,
+    defaultRef: { ref: 'DEEPSEEK_API_KEY', configured: defaultConfigured, source: 'file', writable: true, keyMasked: MASK_DEFAULT },
+    providers: ['deepseek-official', 'other-provider'],
+    sessionListAvailable,
+    workspaces: [
+      alpha,
+      workspace('w-b', WS_B, 'beta', REF_B, bConfigured, 'sk-bet…cret', 'deepseek-official'),
+    ],
+    ungrouped: [
+      { ...workspace(undefined, DIR_U, 'loose', REF_U, false, undefined, undefined), kind: 'directory',
+        sessions: sessionListAvailable ? [ mkSession('session-3', '会话三', 'deepseek-official', 'deepseek-flash',
+          { cwd: DIR_U, updatedAt: 3, wsConfigured: false, wsRef: REF_U }) ] : [] },
+    ],
+    sessionOverrides: overrides[REF_S1] !== undefined
+      ? [{ ref: REF_S1, sessionId: 'session-1', title: '会话一', keyMasked: MASK_S1,
+           provider: 'deepseek-official', visible: true, invalid: invalid[REF_S1] ?? null }]
+      : [],
     statePath: 'C:\\Users\\x\\.dsh\\storages\\dsh-workspace-api-key.json',
+  }
+}
+
+/** /check 的响应形状对齐 lib/index.js 的 checkSession。 */
+function checkPayload(sessionId) {
+  if (sessionId === 'session-2') {
+    return {
+      ok: true, sessionId, title: '会话二', cwd: WS_A,
+      provider: 'other-provider', model: 'gpt-x', level: 'workspace', ref: REF_A,
+      overrideTitle: 'alpha', keyMasked: MASK_WS_A, keyConfigured: true,
+      overrideProvider: 'deepseek-official', overrideModel: null, invalid: null,
+      mismatch: { keyProvider: 'deepseek-official', sessionProvider: 'other-provider', keyModel: null, sessionModel: 'gpt-x' },
+      needsAttention: true,
+      sessionScope: { configured: false, ref: 'DEEPSEEK_API_KEY_SS_SESSION-2' },
+      workspaceScope: { configured: true, ref: REF_A, path: WS_A, title: 'alpha' },
+      defaultRef: { ref: 'DEEPSEEK_API_KEY', configured: true },
+    }
+  }
+  if (sessionId === 'session-3') {
+    return {
+      ok: true, sessionId, title: '会话三', cwd: DIR_U,
+      provider: 'deepseek-official', model: 'deepseek-flash', level: 'default', ref: 'DEEPSEEK_API_KEY',
+      overrideTitle: null, keyMasked: MASK_DEFAULT, keyConfigured: true,
+      overrideProvider: null, overrideModel: null,
+      invalid: { at: '2026-04-01T00:00:00.000Z', status: 'invalid', message: 'Authentication Fails, invalid api key' },
+      mismatch: null, needsAttention: true,
+      sessionScope: { configured: false, ref: null },
+      workspaceScope: { configured: false, ref: null, path: DIR_U, title: null },
+      defaultRef: { ref: 'DEEPSEEK_API_KEY', configured: true },
+    }
+  }
+  return {
+    ok: true, sessionId, title: '会话一', cwd: WS_A,
+    provider: 'deepseek-official', model: 'deepseek-flash', level: 'session', ref: REF_S1,
+    overrideTitle: '会话一', keyMasked: MASK_S1, keyConfigured: true,
+    overrideProvider: 'deepseek-official', overrideModel: null, invalid: null,
+    mismatch: null, needsAttention: false,
+    sessionScope: { configured: true, ref: REF_S1 },
+    workspaceScope: { configured: true, ref: REF_A, path: WS_A, title: 'alpha' },
+    defaultRef: { ref: 'DEEPSEEK_API_KEY', configured: true },
   }
 }
 
@@ -317,20 +477,32 @@ globalThis.window.fetch = async (url, init) => {
 
   let payload
   if (path === '/state') payload = snapshot()
-  else if (path === '/set') {
+  else if (path.startsWith('/check')) {
+    const query = String(path).slice(String(path).indexOf('?') + 1)
+    payload = checkPayload(new URLSearchParams(query).get('sessionId'))
+  } else if (path === '/set') {
+    const ref = body.scope === 'session'
+      ? (body.sessionId === 'session-1' ? REF_S1 : `DEEPSEEK_API_KEY_SS_${String(body.sessionId).toUpperCase()}`)
+      : body.path === WS_A ? REF_A : body.path === WS_B ? REF_B : REF_U
     if (body.useDefault === true || body.key === undefined || body.key === '') {
-      delete overrides[body.path === WS_A ? REF_A : REF_B]
-      delete invalid[REF_A]
+      delete overrides[ref]
+      delete invalid[ref]
     } else {
-      overrides[body.path === WS_A ? REF_A : REF_B] = { path: body.path, title: body.title, at: '2026-02-01T00:00:00.000Z' }
-      delete invalid[body.path === WS_A ? REF_A : REF_B]
+      overrides[ref] = {
+        ref, scope: body.scope ?? 'workspace', sessionId: body.sessionId, path: body.path,
+        title: body.title, provider: body.provider, at: '2026-02-01T00:00:00.000Z',
+      }
+      delete invalid[ref]
     }
     payload = snapshot()
   } else if (path === '/test') {
     // 宿主 /test 只返回测试结果（lib/index.js:803），界面靠随后再拉一次 /state 刷新。
     payload = { ok: true, test: { ok: true, verdict: 'ok', status: 200, latencyMs: 123, detail: '连接正常，key 可用' }, keyMasked: 'sk-new…alue' }
   } else if (path === '/clear-flag') {
-    delete invalid[body.path === WS_A ? REF_A : REF_B]
+    const ref = body.ref ?? (body.scope === 'session'
+      ? REF_S1
+      : body.path === WS_A ? REF_A : body.path === WS_B ? REF_B : REF_U)
+    delete invalid[ref]
     payload = snapshot()
   } else payload = { ok: false, error: `unknown ${path}` }
 
@@ -339,15 +511,54 @@ globalThis.window.fetch = async (url, init) => {
 
 // ─────────────────────────── 渲染面板 ───────────────────────────
 
-/** 挂载（或重新挂载）面板组件，并等宿主 /state 的 promise 落地后自动重渲染。 */
+/** 挂载（或重新挂载）组件，并等宿主 /state 的 promise 落地后自动重渲染。 */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 let tree = null
+let overlayTree = null
+let activePage = page
+let activeOverlay = null
+let pageProps = {}
+let overlayProps = {}
 
-async function mount() {
-  hookStates.clear()
-  forceRender = () => { tree = render(h(page.component, { layout })) }
-  forceRender()
+function rerenderAll() {
+  try {
+    if (activePage !== null) tree = render(h(activePage.component, pageProps))
+    if (activeOverlay !== null) overlayTree = render(h(activeOverlay.component, overlayProps))
+  } catch (err) {
+    if (DEBUG) console.log('RENDER ERROR', err)
+    throw err
+  }
+}
+
+/** 挂载主区面板（faithful 地走注册时的 inject()，返回什么就传什么）。 */
+async function mount(target = page) {
+  resetHooks()
+  activeOverlay = null
+  overlayTree = null
+  activePage = target
+  pageProps = typeof target.options.inject === 'function' ? target.options.inject() : {}
+  forceRender = rerenderAll
+  rerenderAll()
+  await settle()
+}
+
+/** 卸载面板（跑清理 → 注销 bridge.refresh），模拟「离开面板」。 */
+function unmount() {
+  resetHooks()
+  activePage = null
+  tree = null
+}
+
+/** 挂载「进入会话时提醒」的覆盖层组件。 */
+async function mountOverlay(target = overlay) {
+  resetHooks()
+  activePage = null
+  tree = null
+  activeOverlay = target
+  overlayProps = typeof target.options.inject === 'function' ? target.options.inject() : {}
+  forceRender = rerenderAll
+  rerenderAll()
   await settle()
 }
 
@@ -430,6 +641,115 @@ console.log('\n[9] 系统默认设置卡片')
 check('显示「已配置 · file」徽标', textOf(tree).includes('已配置 · file'), textOf(tree).slice(-260))
 check('显示当前 key 掩码', textOf(tree).includes('sk-def…ault'))
 check('默认项有测试连接按钮', findButton(tree, '测试连接') !== undefined)
+
+console.log('\n[10] 返回键惰性回归（apply 时 layout 尚未就绪）')
+// 旧实现在 apply 阶段就把 ctx.get('layout') 的结果缓存进闭包，那时若服务还没就绪，
+// 「返回」就成了静默空操作。这里刻意让 layout 晚到，验证点击时惰性取。
+layoutAvailable = false
+const beforeApply = registrations.length
+client.apply(ctx)
+const latePage = registrations.slice(beforeApply).find((r) => r.options.name === 'main')
+check('第二次 apply 注册了主区页面', latePage !== undefined)
+layoutAvailable = true
+registeredCtx.lastPanel = 'unset'
+await mount(latePage)
+click(findButton(tree, '返回'))
+eq('layout 晚到也能返回会话', registeredCtx.lastPanel, null)
+
+console.log('\n[11] 工作区下的会话列表：默认折叠 / 展开 / 徽标')
+await mount(page)
+check('默认折叠：看不到会话标题', !textOf(tree).includes('会话一'), textOf(tree).slice(0, 260))
+const toggle = findButton(tree, '会话 2')
+check('alpha 行有「会话 2」展开开关', toggle !== undefined)
+click(toggle)
+check('展开后显示会话标题', textOf(tree).includes('会话一') && textOf(tree).includes('会话二'), textOf(tree).slice(0, 400))
+check('会话层级徽标：本会话专属', textOf(tree).includes('本会话专属'))
+check('会话层级徽标：工作区专属', textOf(tree).includes('工作区专属'))
+check('服务商不匹配的会话有提醒徽标', textOf(tree).includes('服务商不匹配'))
+check('会话行显示生效 key 掩码', textOf(tree).includes('生效 key'))
+
+console.log('\n[12] 会话级：配置并保存专属 key')
+const s1Row = () => flatten(tree).find((n) => n.props?.className === 'wsk-sess' && textOf(n).includes('会话一'))
+click(findButton(s1Row(), '配置'))
+const s1Inputs = byTag(tree, 'input')
+eq('会话编辑器只出现一个输入框', s1Inputs.length, 1)
+check('编辑器说明当前生效层级', textOf(tree).includes('当前生效：'), textOf(tree).slice(-260))
+s1Inputs[0].props.onChange({ target: { value: 'sk-session-secret' } })
+calls.length = 0
+click(findButton(tree, '保存'))
+await settle()
+const sessionSet = calls.find((c) => c.path === '/set')
+check('会话保存发出了 /set', sessionSet !== undefined, JSON.stringify(calls.map((c) => c.path)))
+eq('会话 /set 带 scope=session', sessionSet?.body?.scope, 'session')
+eq('会话 /set 带 sessionId', sessionSet?.body?.sessionId, 'session-1')
+eq('会话 /set 带新 key', sessionSet?.body?.key, 'sk-session-secret')
+check('提示写明是本会话专属 key', textOf(tree).includes('已保存本会话专属 key'), textOf(tree).slice(0, 200))
+
+console.log('\n[13] 会话级「测试连接」')
+calls.length = 0
+click(findButton(s1Row(), '测试连接'))
+await settle()
+const sessionTest = calls.find((c) => c.path === '/test')
+check('会话测试发出了 /test', sessionTest !== undefined, JSON.stringify(calls.map((c) => c.path)))
+eq('/test 带 scope=session', sessionTest?.body?.scope, 'session')
+eq('/test 带 sessionId', sessionTest?.body?.sessionId, 'session-1')
+check('测试结果显示在界面上', textOf(tree).includes('连接正常'), textOf(tree).slice(-300))
+
+console.log('\n[14] 未分组目录')
+check('显示未分组目录卡片', textOf(tree).includes('未分组目录（1）'), textOf(tree).slice(-400))
+check('未分组目录里的会话也在列表里', textOf(tree).includes('loose'))
+
+console.log('\n[15] 进入会话时的提醒：服务商不匹配')
+sessionStore.current = 'session-2'
+calls.length = 0
+await mountOverlay()
+const mismatchDialog = byClass(overlayTree, 'wsk-overlay')[0]
+check('覆盖层弹出了提醒', mismatchDialog !== undefined)
+check('标题是「可能不匹配」', mismatchDialog !== undefined && textOf(mismatchDialog).includes('可能不匹配'),
+  mismatchDialog === undefined ? '' : textOf(mismatchDialog).slice(0, 200))
+check('正文写明不会自动换 key', textOf(mismatchDialog ?? {}).includes('不会自动更换 key'))
+check('给出「去配置」', findButton(mismatchDialog, '去配置') !== undefined)
+check('不匹配时给「继续用当前 key」而不是稍后', findButton(mismatchDialog, '继续用当前 key') !== undefined)
+eq('只为当前会话请求一次 /check', calls.filter((c) => c.path.startsWith('/check')).length, 1)
+check('/check 带上了 sessionId', calls.find((c) => c.path.startsWith('/check'))?.path.includes('session-2'))
+calls.length = 0
+sessionStore.emit()
+await settle()
+eq('同一个会话不重复打扰', calls.filter((c) => c.path.startsWith('/check')).length, 0)
+
+console.log('\n[16] 「去配置」把焦点交给面板（不自动改 key）')
+registeredCtx.lastPanel = 'unset'
+click(findButton(mismatchDialog, '去配置'))
+eq('主区切到本插件面板', registeredCtx.lastPanel, 'workspace-api-key')
+await mount(page)
+check('面板直接打开了该会话的编辑器', byTag(tree, 'input').length === 1, String(byTag(tree, 'input').length))
+check('编辑器里是该会话的凭据引用', textOf(tree).includes('DEEPSEEK_API_KEY_SS_SESSION-2'), textOf(tree).slice(-320))
+
+console.log('\n[17] 进入会话时的提醒：key 已失效')
+sessionStore.current = 'session-3'
+calls.length = 0
+await mountOverlay()
+const invalidDialog = byClass(overlayTree, 'wsk-overlay')[0]
+check('覆盖层弹出了失效提醒', invalidDialog !== undefined)
+check('标题是「已失效」', invalidDialog !== undefined && textOf(invalidDialog).includes('已失效'),
+  invalidDialog === undefined ? '' : textOf(invalidDialog).slice(0, 200))
+check('正文带上失效原因', textOf(invalidDialog ?? {}).includes('Authentication Fails'), textOf(invalidDialog ?? {}).slice(0, 300))
+check('失效时给「改用系统默认」', findButton(invalidDialog, '改用系统默认') !== undefined)
+calls.length = 0
+click(findButton(invalidDialog, '改用系统默认'))
+await settle()
+const upper = calls.find((c) => c.path === '/set')
+check('改用上层设置发出了 /set', upper !== undefined, JSON.stringify(calls.map((c) => c.path)))
+eq('默认层级按工作区口径回退', upper?.body?.scope, 'workspace')
+eq('回退到该会话所在目录', upper?.body?.path, DIR_U)
+eq('回退请求带 useDefault', upper?.body?.useDefault, true)
+
+console.log('\n[18] 宿主没有会话列表服务时优雅降级')
+sessionListAvailable = false
+await mount(page)
+check('提示只能按工作区配置', textOf(tree).includes('只能按工作区配置 key'), textOf(tree).slice(0, 400))
+check('没有会话开关按钮', findButton(tree, '会话 2') === undefined)
+sessionListAvailable = true
 
 console.log(`\n${checks - failures}/${checks} 通过`)
 if (failures > 0) {
