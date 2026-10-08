@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-api-key",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A DeepSeek Harness plugin that binds a separate DeepSeek API key to each workspace, or to a single session, so the spend of one key stays with the sessions you choose.",
   "type": "module",
   "license": "MIT",
@@ -15,6 +15,7 @@
   "homepage": "https://github.com/COH2357/dsh-workspace-api-key#readme",
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek-harness",
     "plugin",
     "api-key",

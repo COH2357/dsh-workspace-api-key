@@ -115,6 +115,23 @@ const sessionController = {
 }
 let sessionControllerRef = sessionController
 
+// 宿主 live 会话服务（dsh-session 的 "sessions"）：只在 sessionController 给不出
+// 会话时被插件当作兜底。形状照真实源码：get(id) → session，session.header.cwd，
+// session.requestHeader().config = {provider, model}；list() 含子代理会话。
+const liveSessions = [
+  {
+    id: 'live-1',
+    header: { cwd: WS_A },
+    requestHeader: () => ({ config: { provider: 'deepseek-official', model: 'deepseek-flash' } }),
+  },
+  { id: 'live-sub', header: { cwd: WS_A, origin: 'subagent' } },
+  { id: 'live-child', header: { cwd: WS_A, parentSession: 'live-1' } },
+]
+let sessionsServiceRef = {
+  list: () => liveSessions,
+  get: (id) => liveSessions.find((session) => session.id === id),
+}
+
 const workspaceRegistry = {
   list() {
     return [
@@ -176,6 +193,7 @@ const ctx = {
       case 'llm': return llm
       case 'settings': return settings
       case 'sessionController': return sessionControllerRef
+      case 'sessions': return sessionsServiceRef
       default: return undefined
     }
   },
@@ -551,22 +569,61 @@ SESSION_ROWS.pop()
 
 sessionControllerRef = { async list() { throw new Error('session store is not ready') } }
 const listFailing = (await callRoute('/state', 'GET')).body
-eq('list() 抛错时报可用', listFailing.sessionProbe?.available, true)
-eq('list() 抛错时行数为 0', listFailing.sessionProbe?.count, 0)
+eq('list() 抛错时报可用（live 兜底顶上）', listFailing.sessionProbe?.available, true)
+eq('list() 抛错时改用 live 会话服务', listFailing.sessionProbe?.source, 'sessions')
 check('list() 抛错时带出错误文案', String(listFailing.sessionProbe?.error).includes('session store is not ready'), String(listFailing.sessionProbe?.error))
-check('list() 抛错时界面降级（会话列表为空）', (listFailing.workspaces.find((ws) => ws.title === 'alpha')?.sessions?.length ?? 0) === 0)
+check('list() 抛错时仍然列出兜底会话', (listFailing.workspaces.find((ws) => ws.title === 'alpha')?.sessions ?? []).some((s) => s.sessionId === 'live-1'),
+  JSON.stringify(listFailing.sessionProbe))
 
 sessionControllerRef = { list: 'not-a-function' }
 const noList = (await callRoute('/state', 'GET')).body
-eq('list 不是函数时报不可用', noList.sessionProbe?.available, false)
-eq('list 不是函数时 sessionListAvailable 也是 false', noList.sessionListAvailable, false)
+eq('list 不是函数时控制器标记为不可用', noList.sessionControllerAvailable, false)
+eq('list 不是函数时仍靠兜底列会话', noList.sessionProbe?.source, 'sessions')
+eq('list 不是函数时界面仍可配会话级', noList.sessionListAvailable, true)
+check('list 不是函数时带出提示', String(noList.sessionProbe?.error).includes('not a function'), String(noList.sessionProbe?.error))
 
 sessionControllerRef = undefined
 const noService = (await callRoute('/state', 'GET')).body
-eq('没有会话服务时报不可用', noService.sessionProbe?.available, false)
-eq('没有会话服务时行数为 0', noService.sessionProbe?.count, 0)
+eq('没有会话服务时也走兜底', noService.sessionProbe?.source, 'sessions')
+eq('没有会话服务时兜底行数为 1', noService.sessionProbe?.count, 1)
+eq('没有会话服务时控制器标记为不可用', noService.sessionControllerAvailable, false)
 check('没有会话服务时 /state 仍然正常返回工作区', (noService.workspaces?.filter((ws) => ws.kind === 'workspace')?.length ?? 0) === 3, String(noService.workspaces?.length))
 sessionControllerRef = sessionController
+
+console.log('\n[27] sessionController 给不出会话 → 用宿主 live 会话服务兜底')
+sessionsServiceRef = {
+  list: () => liveSessions,
+  get: (id) => liveSessions.find((session) => session.id === id),
+}
+sessionControllerRef = { async list() { return { items: [] } } }
+const fallback = (await callRoute('/state', 'GET')).body
+eq('空信封 → 来源标成 sessions', fallback.sessionProbe?.source, 'sessions')
+eq('兜底行数（子代理会话被跳过）', fallback.sessionProbe?.count, 1)
+check('兜底会话进了对应工作区', (fallback.workspaces.find((ws) => ws.title === 'alpha')?.sessions ?? []).some((s) => s.sessionId === 'live-1'),
+  JSON.stringify(fallback.workspaces.find((ws) => ws.title === 'alpha')?.sessions?.map((s) => s.sessionId)))
+const liveRow = fallback.workspaces.find((ws) => ws.title === 'alpha')?.sessions?.find((s) => s.sessionId === 'live-1')
+eq('兜底行带出 live 会话的模型选择', `${liveRow?.provider}/${liveRow?.model}`, 'deepseek-official/deepseek-flash')
+
+const liveCheck = (await callRoute('/check?sessionId=live-1', 'GET')).body
+eq('check 从 live 会话补 cwd', liveCheck.cwd, WS_A)
+eq('check 从 live 会话补 provider', liveCheck.provider, 'deepseek-official')
+
+sessionControllerRef = undefined
+const onlyLive = (await callRoute('/check?sessionId=live-1', 'GET')).body
+eq('会话服务缺失时 /check 仍能识别会话路径', onlyLive.cwd, WS_A)
+const unknownWithPath = (await callRoute(`/check?sessionId=unknown-session&path=${encodeURIComponent(WS_B)}`, 'GET')).body
+eq('列表里没有的会话也能靠界面传来的 path 定位', unknownWithPath.cwd, WS_B)
+eq('列表里没有的会话 → 回落到工作区级', unknownWithPath.level, 'workspace')
+
+sessionsServiceRef = undefined
+const noFallback = (await callRoute('/state', 'GET')).body
+eq('连 live 服务都没有时 rows 为 0', noFallback.sessionProbe?.count, 0)
+eq('连 live 服务都没有时不可用', noFallback.sessionProbe?.available, false)
+sessionControllerRef = sessionController
+sessionsServiceRef = {
+  list: () => liveSessions,
+  get: (id) => liveSessions.find((session) => session.id === id),
+}
 
 // ───────────────────────────── 收尾 ─────────────────────────────
 

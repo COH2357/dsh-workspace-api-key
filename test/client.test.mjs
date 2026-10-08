@@ -254,6 +254,10 @@ const registeredCtx = { injected: [], lastPanel: 'unset' }
 const layout = { selectPanel: (id) => { registeredCtx.lastPanel = id } }
 
 // 会话列表服务（客户端的 ctx.sessions）：byId[*].retainedBy.mainView 指向主视图里显示的会话。
+// clientSessions=false 模拟「浏览器端也拿不到会话列表」；clientExtraSessions 注入
+// 子代理会话 / displayTitle 等边界条目。
+let clientSessions = true
+let clientExtraSessions = []
 const sessionStore = {
   current: 'session-1',
   listeners: new Set(),
@@ -261,14 +265,15 @@ const sessionStore = {
   getSnapshot() {
     this.snapshotCount += 1
     const main = (id) => (this.current === id ? 1 : 0)
-    return {
-      phase: 'ready',
-      byId: {
-        'session-1': { id: 'session-1', title: '会话一', cwd: WS_A, retainedBy: { mainView: main('session-1') } },
-        'session-2': { id: 'session-2', title: '会话二', cwd: WS_A, retainedBy: { mainView: main('session-2') } },
-        'session-3': { id: 'session-3', title: '会话三', cwd: DIR_U, retainedBy: { mainView: main('session-3') } },
-      },
-    }
+    const byId = clientSessions
+      ? {
+          'session-1': { id: 'session-1', title: '会话一', cwd: WS_A, updatedAt: 9, retainedBy: { mainView: main('session-1') } },
+          'session-2': { id: 'session-2', title: '会话二', cwd: WS_A, updatedAt: 8, retainedBy: { mainView: main('session-2') } },
+          'session-3': { id: 'session-3', title: '会话三', cwd: DIR_U, updatedAt: 3, retainedBy: { mainView: main('session-3') } },
+        }
+      : {}
+    for (const item of clientExtraSessions) byId[item.id] = item
+    return { phase: 'ready', ids: Object.keys(byId), byId }
   },
   subscribe(listener) {
     this.listeners.add(listener)
@@ -732,6 +737,8 @@ check('给出「去配置」', findButton(mismatchDialog, '去配置') !== undef
 check('不匹配时给「继续用当前 key」而不是稍后', findButton(mismatchDialog, '继续用当前 key') !== undefined)
 eq('只为当前会话请求一次 /check', calls.filter((c) => c.path.startsWith('/check')).length, 1)
 check('/check 带上了 sessionId', calls.find((c) => c.path.startsWith('/check'))?.path.includes('session-2'))
+check('/check 也带上 cwd（宿主据此定位工作区）', calls.find((c) => c.path.startsWith('/check'))?.path.includes('path='),
+  calls.find((c) => c.path.startsWith('/check'))?.path)
 calls.length = 0
 sessionStore.emit()
 await settle()
@@ -766,10 +773,12 @@ eq('回退请求带 useDefault', upper?.body?.useDefault, true)
 
 console.log('\n[18] 宿主没有会话列表服务时优雅降级')
 sessionListAvailable = false
+clientSessions = false
 await mount(page)
 check('提示只能按工作区配置', textOf(tree).includes('只能按工作区配置 key'), textOf(tree).slice(0, 400))
 check('没有会话开关按钮', findButton(tree, '会话 2') === undefined)
 sessionListAvailable = true
+clientSessions = true
 
 console.log('\n[19] 宿主半边是旧版本时给出明确提示')
 staleHost = true
@@ -783,9 +792,10 @@ staleHost = false
 console.log('\n[20] 宿主报告 0 个会话 / list() 报错时的诊断')
 probeOverride = { available: true, count: 0, withoutCwd: 0, samples: [] }
 mapSessions = false
+clientSessions = false
 await mount(page)
 check('提示 0 个会话', textOf(tree).includes('宿主报告 0 个会话'), textOf(tree).slice(0, 400))
-check('诊断行显示会话列表 0 个', textOf(tree).includes('会话列表：0 个'), textOf(tree).slice(-400))
+check('诊断行显示宿主会话列表 0 个', textOf(tree).includes('宿主会话列表：0 个'), textOf(tree).slice(-400))
 probeOverride = { available: true, count: 0, withoutCwd: 0, samples: [], error: 'sessionController.list is not a function' }
 await mount(page)
 check('list() 报错显示在诊断行', textOf(tree).includes('sessionController.list is not a function'), textOf(tree).slice(-400))
@@ -793,14 +803,56 @@ check('list() 报错显示在诊断行', textOf(tree).includes('sessionControlle
 console.log('\n[21] 拿到了会话但一个都对不上工作区')
 probeOverride = null
 mapSessions = false
+clientSessions = false
 await mount(page)
 check('提示路径对不上', textOf(tree).includes('没有一个能对上工作区'), textOf(tree).slice(0, 400))
 check('给出会话 cwd 样本', textOf(tree).includes('会话 cwd 样本'), textOf(tree).slice(0, 600))
 check('给出工作区路径样本', textOf(tree).includes('工作区路径样本'), textOf(tree).slice(0, 600))
 mapSessions = true
+clientSessions = true
 await mount(page)
 check('恢复后不再显示诊断横幅', !textOf(tree).includes('没有一个能对上工作区'), textOf(tree).slice(0, 400))
 check('底部诊断行始终显示版本', textOf(tree).includes('插件 v0.2.1'), textOf(tree).slice(-400))
+
+console.log('\n[22] 浏览器端会话列表兜底：宿主给不出会话行也能列出会话（0.2.2 真机 bug）')
+clientExtraSessions = []
+sessionListAvailable = false
+mapSessions = false
+clientSessions = true
+await mount(page)
+check('不显示「只能按工作区配置」降级提示', !textOf(tree).includes('只能按工作区配置 key'), textOf(tree).slice(0, 400))
+check('不显示「宿主报告 0 个会话」诊断', !textOf(tree).includes('宿主报告 0 个会话'), textOf(tree).slice(0, 400))
+check('alpha 仍然有「会话 2」展开开关', findButton(tree, '会话 2') !== undefined, textOf(tree).slice(0, 600))
+check('未分组目录仍然有「会话 1」展开开关', findButton(tree, '会话 1') !== undefined, textOf(tree).slice(0, 600))
+const hostEmptyToggle = findButton(tree, '会话 2')
+click(hostEmptyToggle)
+check('展开后列出浏览器端的会话标题', textOf(tree).includes('会话一') && textOf(tree).includes('会话二'), textOf(tree).slice(0, 600))
+check('补出的会话行带层级徽标（本会话专属）', textOf(tree).includes('本会话专属'), textOf(tree).slice(0, 900))
+check('补出的会话行带层级徽标（工作区专属）', textOf(tree).includes('工作区专属'), textOf(tree).slice(0, 900))
+check('诊断行分别报告宿主/浏览器会话数',
+  textOf(tree).includes('宿主会话列表：不可用') && textOf(tree).includes('浏览器会话列表：3 个'),
+  textOf(tree).slice(-400))
+
+console.log('\n[23] 浏览器端兜底：displayTitle 优先 / 子代理会话不列出 / 未知 cwd 进未分组')
+clientExtraSessions = [
+  { id: 'sub-1', title: '子代理会话', cwd: WS_A, origin: 'subagent', parentId: 'session-1' },
+  { id: 'session-4', title: '原标题', displayTitle: '显示标题优先', cwd: WS_B, updatedAt: 5 },
+  { id: 'session-5', title: '别的目录会话', cwd: 'C:\\work\\other', updatedAt: 4 },
+]
+await mount(page)
+check('子代理会话不列出', !textOf(tree).includes('子代理会话'), textOf(tree).slice(0, 700))
+check('alpha 的会话数没被子代理会话撑大', findButton(tree, '会话 2') !== undefined, textOf(tree).slice(0, 700))
+check('未知 cwd 进未分组目录（2 个）', textOf(tree).includes('未分组目录（2）'), textOf(tree).slice(-600))
+const betaRow = flatten(tree).find((n) => n.props?.className === 'wsk-row' && textOf(n).includes('C:\\work\\beta'))
+check('找到 beta 卡片', betaRow !== undefined)
+const betaToggle = buttons(betaRow).find((b) => textOf(b).includes('会话 1'))
+check('beta 出现「会话 1」开关', betaToggle !== undefined, textOf(betaRow ?? {}).slice(0, 300))
+click(betaToggle)
+check('displayTitle 优先于 title', textOf(tree).includes('显示标题优先') && !textOf(tree).includes('原标题'), textOf(tree).slice(0, 900))
+clientExtraSessions = []
+sessionListAvailable = true
+clientSessions = true
+await mount(page)
 
 console.log(`\n${checks - failures}/${checks} 通过`)
 if (failures > 0) {
