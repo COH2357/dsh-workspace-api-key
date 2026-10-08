@@ -258,6 +258,8 @@ const layout = { selectPanel: (id) => { registeredCtx.lastPanel = id } }
 // 子代理会话 / displayTitle 等边界条目。
 let clientSessions = true
 let clientExtraSessions = []
+/** 只暴露这些 id（模拟「浏览器端只认识一部分会话」）。 */
+let clientOnlyIds = null
 const sessionStore = {
   current: 'session-1',
   listeners: new Set(),
@@ -273,6 +275,11 @@ const sessionStore = {
         }
       : {}
     for (const item of clientExtraSessions) byId[item.id] = item
+    if (clientOnlyIds !== null) {
+      for (const id of Object.keys(byId)) {
+        if (!clientOnlyIds.includes(id)) delete byId[id]
+      }
+    }
     return { phase: 'ready', ids: Object.keys(byId), byId }
   },
   subscribe(listener) {
@@ -852,6 +859,22 @@ check('displayTitle 优先于 title', textOf(tree).includes('显示标题优先'
 clientExtraSessions = []
 sessionListAvailable = true
 clientSessions = true
+clientOnlyIds = null
+await mount(page)
+
+console.log('\n[24] 浏览器端只认识一部分会话 → 宿主行不会被挤掉')
+sessionListAvailable = true
+mapSessions = true
+clientSessions = true
+clientOnlyIds = ['session-2']
+await mount(page)
+check('宿主列出的 session-1 仍在（浏览器端不认识它）', textOf(tree).includes('会话 2'), textOf(tree).slice(0, 700))
+const alphaRowRetained = flatten(tree).find((n) => n.props?.className === 'wsk-row' && textOf(n).includes('C:\\work\\alpha'))
+check('alpha 会话数仍是宿主给出的 2 个', findButton(alphaRowRetained ?? {}, '会话 2') !== undefined, textOf(alphaRowRetained ?? {}).slice(0, 300))
+click(findButton(alphaRowRetained ?? {}, '会话 2'))
+check('展开后既有宿主的「会话一」也有浏览器端的「会话二」',
+  textOf(tree).includes('会话一') && textOf(tree).includes('会话二'), textOf(tree).slice(0, 900))
+clientOnlyIds = null
 await mount(page)
 
 console.log(`\n${checks - failures}/${checks} 通过`)
