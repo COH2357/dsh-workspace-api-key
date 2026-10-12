@@ -266,6 +266,8 @@ let sessionsServiceReady = true
 let hostSubagentRows = false
 /** true = 宿主行里混进「空会话」（建了但一句话都没发过的会话）。 */
 let hostBlankRows = false
+/** true = 宿主行里混进「只有空会话的未分组目录」（新宿主已经不发这种组）。 */
+let hostBlankUngroupedRows = false
 const sessionStore = {
   current: 'session-1',
   listeners: new Set(),
@@ -347,6 +349,8 @@ check('覆盖层有组件', typeof overlay?.component === 'function')
 const WS_A = 'C:\\work\\alpha'
 const WS_B = 'C:\\work\\beta'
 const DIR_U = 'C:\\work\\loose'
+/** 只有一个空会话的目录（侧栏不会显示它，见 [29]）。 */
+const DIR_BLANK = 'C:\\work\\blank-only'
 const REF_A = 'DEEPSEEK_API_KEY_WS_ABCDEF0123456789'
 const REF_B = 'DEEPSEEK_API_KEY_WS_0000000000000000'
 const REF_U = 'DEEPSEEK_API_KEY_WS_9999999999999999'
@@ -462,8 +466,15 @@ function snapshot() {
     ],
     ungrouped: [
       { ...workspace(undefined, DIR_U, 'loose', REF_U, false, undefined, undefined), kind: 'directory',
-        sessions: sessionListAvailable && mapSessions ? [ mkSession('session-3', '会话三', 'deepseek-official', 'deepseek-flash',
-          { cwd: DIR_U, updatedAt: 3, wsConfigured: false, wsRef: REF_U }) ] : [] },
+        sessions: [
+          ...(sessionListAvailable && mapSessions ? [ mkSession('session-3', '会话三', 'deepseek-official', 'deepseek-flash',
+            { cwd: DIR_U, updatedAt: 3, wsConfigured: false, wsRef: REF_U }) ] : []),
+          // 旧宿主还会把「只有空会话」的目录也列进来（新宿主已经不发这种组）。
+          ...(hostBlankUngroupedRows && sessionListAvailable && mapSessions
+            ? [{ ...mkSession('blank-2', undefined, 'deepseek-official', 'deepseek-flash',
+              { cwd: DIR_U, updatedAt: 2, wsConfigured: false, wsRef: REF_U }), blank: true }]
+            : []),
+        ] },
     ],
     sessionOverrides: overrides[REF_S1] !== undefined
       ? [{ ref: REF_S1, sessionId: 'session-1', title: '会话一', keyMasked: MASK_S1,
@@ -962,6 +973,32 @@ check('展开后能看到当前空会话', textOf(tree).includes('新会话'), t
 hostBlankRows = false
 clientExtraSessions = []
 sessionStore.current = 'session-1'
+await mount(page)
+
+console.log('\n[29] 只有空会话的目录不列（侧栏上没有的目录，面板也不该有）')
+// 旧宿主可能把「只有空会话」的目录也发过来；侧栏对空会话只显示当前打开的那一个，
+// 所以这种目录在侧栏里根本不存在，面板必须跟着藏起来。
+hostBlankUngroupedRows = true
+clientExtraSessions = [
+  { id: 'blank-loose', cwd: DIR_BLANK, updatedAt: 2, blank: true, retainedBy: { mainView: 0 } },
+]
+clientSessions = false
+await mount(page)
+check('只有空会话的目录不列出来', !textOf(tree).includes('blank-only'), textOf(tree).slice(-400))
+eq('未分组目录只剩有会话的那个', (textOf(tree).match(/未分组目录（/g) ?? []).length, 1)
+clientSessions = true
+await mount(page)
+check('浏览器端能看到该空会话时也不列', !textOf(tree).includes('blank-only'), textOf(tree).slice(-500))
+check('未分组目录仍然是 1 个', textOf(tree).includes('未分组目录（1）'), textOf(tree).slice(-500))
+// 反例：那个空会话变成「当前打开」时，侧栏会显示它，面板也要能给它单独配 key。
+clientExtraSessions = [
+  { id: 'blank-loose', cwd: DIR_BLANK, updatedAt: 2, blank: true, retainedBy: { mainView: 1 } },
+]
+await mount(page)
+check('当前空会话的目录会列出来', textOf(tree).includes('未分组目录（2）'), textOf(tree).slice(-500))
+check('并带上目录名', textOf(tree).includes('blank-only'), textOf(tree).slice(-500))
+hostBlankUngroupedRows = false
+clientExtraSessions = []
 await mount(page)
 
 console.log(`\n${checks - failures}/${checks} 通过`)

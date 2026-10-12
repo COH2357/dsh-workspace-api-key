@@ -510,6 +510,29 @@ check('未注册目录里的会话也单独成组', looseRow !== undefined, JSON
 eq('未分组会话没有工作区覆盖 → default', looseRow?.sessions?.[0]?.level, 'default')
 check('会话级覆盖有总览', (snapshotBody.sessionOverrides?.length ?? 0) === 1)
 
+console.log('\n[21b] 只有空会话的目录：宿主照发（带 blank 标记），由浏览器端按侧栏语义决定列不列')
+const DIR_BLANK_ONLY = 'C:\\work\\blank-only'
+// 侧栏对「刚建好、一句话都没发过」的空会话只显示当前打开的那一个；一个只含空会话的目录
+// 因此可能根本不出现在侧栏里。宿主判不了「哪个是当前会话」（那是浏览器端 store 的事），
+// 所以它必须把目录原样发出去 + 标明这是「只有空会话」的目录，由 lib/client.js 过滤。
+SESSION_ROWS.push({ sessionId: 'session-blank', cwd: DIR_BLANK_ONLY, updatedAt: 30, blank: true, projections: { values: { title: '' } } })
+const blankOnly = (await callRoute('/state', 'GET')).body
+const blankRow = blankOnly.ungrouped.find((ws) => ws.path === DIR_BLANK_ONLY)
+check('只有空会话的目录仍然发给界面（界面才知道哪个是当前会话）', blankRow !== undefined,
+  JSON.stringify(blankOnly.ungrouped.map((w) => w.path)))
+eq('会话行带 blank 标记（界面据此过滤）', blankRow?.sessions?.[0]?.blank, true)
+check('诊断字段列出这个目录', Array.isArray(blankOnly.hiddenBlankDirs) && blankOnly.hiddenBlankDirs.includes(DIR_BLANK_ONLY),
+  JSON.stringify(blankOnly.hiddenBlankDirs))
+check('有真实会话的未分组目录不算「只有空会话」',
+  !blankOnly.hiddenBlankDirs.includes(DIR_BARE), JSON.stringify(blankOnly.hiddenBlankDirs))
+// 发了第一条消息（blank 变 false）后侧栏一定会显示它，诊断字段也要跟着消失。
+SESSION_ROWS[SESSION_ROWS.length - 1] = { sessionId: 'session-blank', cwd: DIR_BLANK_ONLY, updatedAt: 30, blank: false, projections: { values: { title: '刚聊过的会话' } } }
+const afterFirstMessage = (await callRoute('/state', 'GET')).body
+check('发过消息后该目录不再算「只有空会话」',
+  !afterFirstMessage.hiddenBlankDirs.includes(DIR_BLANK_ONLY), JSON.stringify(afterFirstMessage.hiddenBlankDirs))
+eq('发过消息后 blank 变成 false', afterFirstMessage.ungrouped.find((ws) => ws.path === DIR_BLANK_ONLY)?.sessions?.[0]?.blank, false)
+SESSION_ROWS.pop()
+
 console.log('\n[22] /check：进入会话前的判定（只报告，不改 key）')
 const okCheck = (await callRoute('/check?sessionId=session-1', 'GET')).body
 eq('check 认出会话', okCheck.sessionId, 'session-1')

@@ -33,6 +33,7 @@ Host half (`lib/index.js`):
 - rewrites only refs a provider actually reads: the default ref, every adapter's configured `apiKeyEnv`, and its own generated refs. Every other ref passes through untouched;
 - builds the session list from the `sessionController` service (`list()`, unwrapping its `{items: […]}` envelope) and falls back to the live `sessions` service (`ctx.get('sessions').list()`), so the panel still has sessions when the controller is missing, throws, or returns an empty list. It hides the two kinds of session the sidebar hides: subagent sessions (`origin: 'subagent'`, or a `parentSession`) and *blank* sessions (created but never prompted — the sidebar shows only the one currently open). Without those two filters one workspace with a single real session listed thirteen;
 - reports its own version and a session probe (`available`, `shape`, `source`, `count`, `withoutCwd`, `subagents`, `samples`, `error`, plus sample workspace paths) in `/wsk-api/state`, so the panel can say *why* no sessions are listed: a stale host half (only a page reload instead of an app restart), a missing `sessionController`, a throwing `list()`, an unexpected envelope shape, or a `cwd` that matches no workspace path;
+- lists a directory that is not a registered workspace only if the sidebar would show it. It cannot decide that itself, because "only the currently open blank session counts" is knowledge the browser side holds (`retainedBy.mainView`), so it sends every such directory plus a `blank` flag per session and a `hiddenBlankDirs` list naming the ones whose sessions are all blank — the browser half applies the same verdict the sidebar does;
 - keeps its own bookkeeping (which level maps to which ref, invalid flags, the provider a key was recorded for) in `$DSH_HOME/storages/dsh-workspace-api-key.json`;
 - observes failures through the `agent/request-error` waterfall without ever returning `{kind: 'retry'}` — it only records the verdict and calls `next()`.
 
@@ -51,7 +52,7 @@ The browser half (`lib/client.js`) registers into the `sidebar.panellist` slot (
 
 Only loopback callers are accepted (`127.0.0.1`, `::1`, `::ffff:127.0.0.1`) with a same-origin or absent `Origin`. No response ever contains a plaintext key, only a mask.
 
-Workspace targets may be directories that are not registered workspaces; such entries appear as ungrouped directories next to the workspaces they belong to.
+Workspace targets may be directories that are not registered workspaces; such entries appear as ungrouped directories, and only the ones the sidebar would actually show — a directory whose only sessions are brand-new and still empty (the sidebar shows just the currently open one) is not listed.
 
 ## Install
 
@@ -71,8 +72,8 @@ Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `p
 ## Tests
 
 ```sh
-node test/host.test.mjs     # 130 assertions
-node test/client.test.mjs   # 139 assertions
+node test/host.test.mjs     # 136 assertions
+node test/client.test.mjs   # 145 assertions
 ```
 
 Neither suite needs a running DSH process. The host suite drives `apply()` against a mock context (fake `credentials`, `workspaceRegistry`, `agents`, `sessionController`, `sessions`, `webServer`, stubbed `fetch`) and covers ref derivation, the session → workspace → default cascade, workspace matching, redirecting a second adapter's `apiKeyEnv`, clearing back to the default, 401/402/429/5xx classification, the loopback and origin checks, state persistence, and the session probe including the `{items}` envelope, the live-session fallback, and subagent and blank sessions being hidden. The client suite loads `lib/client.js` through a minimal `window.__ModuleLoader__` plus a small React runtime, renders the panel and the overlay, and asserts slot registration, the first render, session expand/collapse, per-session saving and testing, sessions recovered from the browser-side store when the host has none (with `displayTitle` winning and subagent sessions hidden), the ungrouped-directory card, the stale and mismatch prompts, the "go configure" hand-off, graceful degradation without a session list, and back-navigation when `ctx.get('layout')` only becomes available after the plugin was applied.
