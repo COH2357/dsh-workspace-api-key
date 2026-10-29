@@ -22,7 +22,7 @@ session key  →  workspace key  →  system default
 - **No silent substitution** — neither warning ever changes which key is used. The decision stays with you, which is the whole point: an automatically swapped key would defeat the billing separation.
 - **One-click revert** — clearing a session entry falls back to the workspace key, clearing a workspace entry falls back to the system default.
 - **A search default key of its own** — the `搜索默认 key` card binds a key to `DEEPSEEK_API_KEY_SEARCH`, so search can be billed apart from chat: a session's own key wins, then a synced workspace's chat cascade, then this key, then whatever the official search page stores.
-- **Takes over the official search key field** — on startup, while the new Web Search API is on, the plugin points the official `web-deepseek-api` / `web-search-deepseek` entry at `DEEPSEEK_API_KEY_SEARCH` (only that `apiKeyEnv` pointer, never a key value). The `设置 → 插件 → 网页搜索` field then edits the same search key this panel does, so it can no longer overwrite your chat key, and there is no second place where a search key can hide.
+- **Takes over the official search key field, once there is a key to put there** — on startup, while the new Web Search API is on, the plugin points the official `web-deepseek-api` / `web-search-deepseek` entry at `DEEPSEEK_API_KEY_SEARCH` (only that `apiKeyEnv` pointer, never a key value). The `设置 → 插件 → 网页搜索` field then edits the same search key this panel does, so it can no longer overwrite your chat key, and there is no second place where a search key can hide. Until you save a search key, the official entry keeps pointing at the chat key, so upgrading never breaks `web_search`; the panel says so instead of failing silently.
 - **A search switch per workspace** — every workspace row carries a `同步搜索 API` checkbox. Ticked, the `web_search` / `web_fetch` calls made by sessions in that directory use the key they would use for chat (`session → workspace → system default`); unticked, they keep the key the official 设置 → 插件 → 网页搜索 page manages. A session with its own key always wins, so "sync on, session configured separately" spends the session key, not the search key.
 - **Search warnings that arrive before the failure** — when a search key is configured but `启用新版 Web 搜索 API` is off, or when the new API is on but its key ref is empty, the panel shows a warning banner and the entering-session overlay says it too, in one line you can act on. The overlay stays quiet about search problems when the search provider is not the one in use.
 - **A usage guide** — `使用说明` at the top of the panel recommends two keys: a chat default (`default`) and a search default (`search-default`), so the two budgets stay separate; it also draws the cascade and lists the situations that trigger a warning.
@@ -79,7 +79,7 @@ The command forwards its arguments to pnpm inside the profile directory, so the 
 pnpm add dsh-workspace-api-key          # or: npm install dsh-workspace-api-key
 ```
 
-Pin a version with `dsh-workspace-api-key@0.2.12`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
+Pin a version with `dsh-workspace-api-key@0.2.13`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
 
 Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `package.json` and restart DSH. For local development, use a link instead:
 
@@ -90,7 +90,7 @@ Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `p
 ## Tests
 
 ```sh
-node test/host.test.mjs     # 173 assertions
+node test/host.test.mjs     # 175 assertions
 node test/client.test.mjs   # 173 assertions
 ```
 

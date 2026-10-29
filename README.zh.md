@@ -22,7 +22,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - **绝不悄悄换 key** —— 两种提醒都不会改动实际使用的 key，决定权始终在你手上；自动替换会直接破坏「按会话分离计费」这个初衷。
 - **一键回退** —— 清空会话条目回到工作区 key，清空工作区条目回到系统默认。
 - **搜索默认 key 单独一把** —— 「搜索默认 key」卡片把这把 key 绑到 `DEEPSEEK_API_KEY_SEARCH`，于是搜索可以和聊天分开计费：会话自己的 key 最优先，其次勾了同步的工作区走聊天层级，再次是这把搜索默认 key，最后才是官方搜索页里配的那把。
-- **接管官方搜索 key 设置** —— 启动时若已启用新版 Web 搜索 API，插件把官方 `web-deepseek-api` / `web-search-deepseek` 条目的 `apiKeyEnv` 指到 `DEEPSEEK_API_KEY_SEARCH`（只改这一个指向，永远不动 key 内容）。此后「设置 → 插件 → 网页搜索」里填的就是本面板这把搜索 key，既不会再顶掉聊天 key，也不存在第二处藏搜索 key 的地方。
+- **接管官方搜索 key 设置（先有 key 才接管）** —— 启动时若已启用新版 Web 搜索 API，插件把官方 `web-deepseek-api` / `web-search-deepseek` 条目的 `apiKeyEnv` 指到 `DEEPSEEK_API_KEY_SEARCH`（只改这一个指向，永远不动 key 内容）。此后「设置 → 插件 → 网页搜索」里填的就是本面板这把搜索 key，既不会再顶掉聊天 key，也不存在第二处藏搜索 key 的地方。还没配搜索 key 时，官方条目继续指着聊天那把，所以升级不会让 `web_search` 直接失效，面板会如实提醒「搜索暂时和聊天共用一把 key」。
 - **每个工作区一个搜索开关** —— 每个工作区行上都有「同步搜索 API」复选框。勾选后，该目录下会话发出的 `web_search` / `web_fetch` 请求改用它们聊天时用的那把 key（会话 → 工作区 → 系统默认）；不勾选则继续用官方「设置 → 插件 → 网页搜索」里配置的那把 key。会话自己配了 key 时永远优先，所以「工作区同步、会话单独设置」花的是会话那把 key，而不是搜索默认 key。
 - **在失败之前就提醒的搜索告警** —— 配了搜索 key 但没打开「启用新版 Web 搜索 API」，或者新版 API 打开了但它的 key ref 是空的，面板会显示提醒条，点进会话时的覆盖层也会用一句可直接照做的话说明；当生效的搜索通道不是新版 API 时，覆盖层不会拿搜索问题打扰你。
 - **使用说明** —— 面板顶部有「使用说明」，推荐两把 key 分工：聊天默认用 `default`，搜索默认用 `search-default`，两份预算互不干扰；里面还画了层级，并列出了会触发提醒的几种情况。
@@ -79,7 +79,7 @@ dsh plugin --profile web add dsh-workspace-api-key
 pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api-key
 ```
 
-锁版本用 `dsh-workspace-api-key@0.2.12`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
+锁版本用 `dsh-workspace-api-key@0.2.13`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
 
 然后把 `"dsh-workspace-api-key"` 加进该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH。本地开发用 link 代替：
 
@@ -90,7 +90,7 @@ pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api
 ## 测试
 
 ```sh
-node test/host.test.mjs     # 173 条断言
+node test/host.test.mjs     # 175 条断言
 node test/client.test.mjs   # 173 条断言
 ```
 

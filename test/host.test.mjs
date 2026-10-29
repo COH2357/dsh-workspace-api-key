@@ -778,16 +778,28 @@ check('提醒里说明那把 key 不会被使用',
   String((idleSnap.search?.warnings ?? []).find((w) => w.code === 'search-key-idle')?.detail).includes('不会被使用'),
   JSON.stringify(idleSnap.search?.warnings))
 
-// 「开了新版却配不出搜索 key」→ 更严重的提醒
+// 「开了新版但还没配搜索默认 key，聊天 key 还在」→ 提醒计费没分开（搜索仍可用）
 creds.delete('DEEPSEEK_SEARCH_KEY')
 webSettings.searchProvider = 'deepseek-search-api'
 webSettings.fetchProvider = 'deepseek-fetch-api'
 await callRoute('/search-sync', 'POST', { path: WS_A, enabled: false })
 const missingSnap = (await callRoute('/state', 'GET')).body
-check('开了新版却没配搜索 key → 提醒',
-  (missingSnap.search?.warnings ?? []).some((w) => w.code === 'search-key-missing'),
+check('开了新版但没配搜索默认 key → 提醒',
+  (missingSnap.search?.warnings ?? []).some((w) => w.code === 'search-default-missing'),
+  JSON.stringify(missingSnap.search?.warnings))
+check('提醒里说明搜索暂时沿用聊天那把 key',
+  String((missingSnap.search?.warnings ?? []).find((w) => w.code === 'search-default-missing')?.detail).includes('和聊天共用一把'),
   JSON.stringify(missingSnap.search?.warnings))
 eq('取消同步后已同步数为 0', missingSnap.search?.syncCount, 0)
+
+// 聊天 key 也没了 → 升级成「搜索会直接失败」的严重提醒
+const chatKeyBackup = creds.get('DEEPSEEK_API_KEY')
+creds.delete('DEEPSEEK_API_KEY')
+const noKeySnap = (await callRoute('/state', 'GET')).body
+check('开了新版且一把 key 都没有 → 严重提醒',
+  (noKeySnap.search?.warnings ?? []).some((w) => w.code === 'search-key-missing'),
+  JSON.stringify(noKeySnap.search?.warnings))
+creds.set('DEEPSEEK_API_KEY', chatKeyBackup)
 
 // 搜索连接测试打的是搜索端点，不是 Messages 端点
 stubFetch(() => fakeRes(200, JSON.stringify({ results: [] })))
