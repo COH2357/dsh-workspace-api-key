@@ -46,6 +46,7 @@ const DIR_BARE = 'C:\\work\\bare' // 从未配置过的目录
 const creds = new Map([
   ['DEEPSEEK_API_KEY', 'sk-default'],
   ['DEEPSEEK_API_KEY_EXTRA', 'sk-extra'],
+  ['DEEPSEEK_SEARCH_KEY', 'sk-search-default'],
 ])
 
 const resolveCalls = []
@@ -150,6 +151,30 @@ const webServer = {
   },
 }
 
+// 假 web 服务：模拟官方「新版 Web 搜索 API」的 provider —— 它在发请求前会按
+// settings 里的 apiKeyEnv 去 credentials 取 key。因此只有真的经过
+// credentials.resolve 的调用，才会被插件的「搜索作用域」认出来。
+const webSettings = {
+  searchProvider: 'deepseek-official',
+  fetchProvider: 'http',
+  apiKeyEnv: 'DEEPSEEK_SEARCH_KEY',
+  baseURL: 'https://api.deepseek.com/v1/tools',
+  count: 10,
+}
+const webCalls = []
+const web = {
+  async search(request) {
+    const used = await credentials.resolve(webSettings.apiKeyEnv)
+    webCalls.push({ kind: 'search', query: request?.query, key: used?.value })
+    return { results: [] }
+  },
+  async fetch(request) {
+    const used = await credentials.resolve(webSettings.apiKeyEnv)
+    webCalls.push({ kind: 'fetch', url: request?.url, key: used?.value })
+    return { content: '' }
+  },
+}
+
 const errorListeners = []
 const llm = {
   adapters: new Map([
@@ -178,6 +203,14 @@ const settings = {
     // 故意给一个**错的** baseURL：适配器 options() 才是权威来源，测试要证明它优先。
     if (section === 'llm-deepseek') return { baseURL: 'https://api.deepseek.com' }
     if (section === 'agent-default-model') return { model: 'deepseek-flash' }
+    // 官方「网页搜索」设置：开关体现为 provider 选择，key 引用在各自命名空间。
+    if (section === 'web') {
+      return { searchProvider: webSettings.searchProvider, fetchProvider: webSettings.fetchProvider }
+    }
+    if (section === 'web-deepseek-api') {
+      return { apiKeyEnv: webSettings.apiKeyEnv, baseURL: webSettings.baseURL, count: webSettings.count }
+    }
+    if (section === 'web-search-deepseek') return { apiKeyEnv: webSettings.apiKeyEnv }
     return undefined
   },
 }
@@ -190,6 +223,7 @@ const ctx = {
       case 'agents': return agents
       case 'workspaceRegistry': return workspaceRegistry
       case 'webServer': return webServer
+      case 'web': return web
       case 'llm': return llm
       case 'settings': return settings
       case 'sessionController': return sessionControllerRef
@@ -486,7 +520,7 @@ currentSession = undefined
 
 console.log('\n[21] /state 列出会话行、生效层级与不匹配标记')
 const snapshotBody = (await callRoute('/state', 'GET')).body
-eq('状态版本升到 2', snapshotBody.storeVersion, 2)
+eq('状态版本升到 3', snapshotBody.storeVersion, 3)
 check('返回插件版本（界面据此判断宿主是否已重启）', typeof snapshotBody.pluginVersion === 'string' && snapshotBody.pluginVersion.length > 0, String(snapshotBody.pluginVersion))
 eq('会话探针报告行数', snapshotBody.sessionProbe?.count, SESSION_ROWS.length)
 eq('会话探针报告可用', snapshotBody.sessionProbe?.available, true)
@@ -666,6 +700,93 @@ check('父会话还在', alphaAfterFilter.some((s) => s.sessionId === 'session-1
 check('过滤后的会话标题里没有子代理字样',
   !JSON.stringify(filtered.workspaces).includes('子代理'), JSON.stringify(filtered.workspaces).slice(0, 300))
 sessionControllerRef = sessionController
+
+console.log('\n[29] 新版 Web 搜索 API：同步开关、会话优先、以及「配了却没用上」的提醒')
+webCalls.length = 0
+currentCwd = WS_A
+currentSession = 'session-2'
+
+// 基线：旧 Messages 通道 —— 搜索与聊天一样按层级取 key
+await web.search({ query: 'legacy-baseline' })
+eq('旧通道：搜索沿用聊天层级的 key', webCalls[0]?.key, 'sk-alpha-1234567890')
+
+// 打开新版 Search/Fetch API（官方开关 = 改 provider 选择）
+webSettings.searchProvider = 'deepseek-search-api'
+webSettings.fetchProvider = 'deepseek-fetch-api'
+webCalls.length = 0
+await web.search({ query: 'api-unsynced' })
+eq('新版通道 + 没勾同步 → 用搜索插件自己的 key', webCalls[0]?.key, 'sk-search-default')
+
+const notSyncedYet = (await callRoute('/state', 'GET')).body
+eq('state 报出搜索走新版 API', notSyncedYet.search?.apiChannel, true)
+eq('state 报出搜索 key 引用', notSyncedYet.search?.keyRef, 'DEEPSEEK_SEARCH_KEY')
+eq('没勾同步时已同步数为 0', notSyncedYet.search?.syncCount, 0)
+
+// 勾上「同步搜索 API」：该目录下的搜索改用聊天用的那把 key
+const syncOn = await callRoute('/search-sync', 'POST', { path: WS_A, enabled: true })
+eq('同步开关写入成功', syncOn.body.ok, true)
+webCalls.length = 0
+await web.search({ query: 'api-synced' })
+eq('勾了同步 → 搜索改用工作区 key', webCalls[0]?.key, 'sk-alpha-1234567890')
+eq('同步不改聊天通道的解析', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-alpha-1234567890')
+
+const syncedSnap = (await callRoute('/state', 'GET')).body
+eq('已同步数量为 1', syncedSnap.search?.syncCount, 1)
+const syncedAlpha = syncedSnap.workspaces.find((ws) => ws.title === 'alpha')
+eq('工作区行带同步标记', syncedAlpha?.searchSync, true)
+const syncedBeta = syncedSnap.workspaces.find((ws) => ws.title === 'beta')
+eq('没勾的工作区不带同步标记', syncedBeta?.searchSync, false)
+
+// 会话单独设置的 key 永远优先 —— 即使在官方搜索插件里配了别的 key
+await callRoute('/set', 'POST', { scope: 'session', sessionId: 'session-2', key: 'sk-session-search' })
+webCalls.length = 0
+await web.search({ query: 'session-first' })
+eq('会话单独设置的 key 优先于搜索插件的 key', webCalls[0]?.key, 'sk-session-search')
+
+const sessionCheck = (await callRoute('/check?sessionId=session-2', 'GET')).body
+eq('check 报出搜索走新版 API', sessionCheck.search?.apiChannel, true)
+eq('check 报出该会话用的是自己的 key', sessionCheck.search?.sessionOwnKey, true)
+check('check 报出搜索生效引用（会话级 ref）',
+  /^DEEPSEEK_API_KEY_SS_[0-9A-F]{16}$/.test(String(sessionCheck.search?.ref)),
+  String(sessionCheck.search?.ref))
+
+// 「配了搜索 key 却没打开新版开关」→ 必须提醒（否则用户以为它在生效）
+creds.set('DEEPSEEK_SEARCH_KEY', 'sk-search-default')
+webSettings.searchProvider = 'deepseek-official'
+webSettings.fetchProvider = 'http'
+const idleSnap = (await callRoute('/state', 'GET')).body
+check('配了搜索 key 但没开新版 → 提醒',
+  (idleSnap.search?.warnings ?? []).some((w) => w.code === 'search-key-idle'),
+  JSON.stringify(idleSnap.search?.warnings))
+check('提醒里说明那把 key 不会被使用',
+  String((idleSnap.search?.warnings ?? []).find((w) => w.code === 'search-key-idle')?.detail).includes('不会被使用'),
+  JSON.stringify(idleSnap.search?.warnings))
+
+// 「开了新版却配不出搜索 key」→ 更严重的提醒
+creds.delete('DEEPSEEK_SEARCH_KEY')
+webSettings.searchProvider = 'deepseek-search-api'
+webSettings.fetchProvider = 'deepseek-fetch-api'
+await callRoute('/search-sync', 'POST', { path: WS_A, enabled: false })
+const missingSnap = (await callRoute('/state', 'GET')).body
+check('开了新版却没配搜索 key → 提醒',
+  (missingSnap.search?.warnings ?? []).some((w) => w.code === 'search-key-missing'),
+  JSON.stringify(missingSnap.search?.warnings))
+eq('取消同步后已同步数为 0', missingSnap.search?.syncCount, 0)
+
+// 搜索连接测试打的是搜索端点，不是 Messages 端点
+stubFetch(() => fakeRes(200, JSON.stringify({ results: [] })))
+const searchTest = await callRoute('/test', 'POST', { scope: 'session', sessionId: 'session-2', channel: 'search' })
+eq('搜索测试 → ok', searchTest.body.test?.verdict, 'ok')
+check('搜索测试打的是 /search 端点', String(lastCall()?.url).endsWith('/search'), String(lastCall()?.url))
+globalThis.fetch = realFetch
+
+// 复位，避免影响后续用例
+creds.set('DEEPSEEK_SEARCH_KEY', 'sk-search-default')
+webSettings.searchProvider = 'deepseek-official'
+webSettings.fetchProvider = 'http'
+await callRoute('/set', 'POST', { scope: 'session', sessionId: 'session-2', useDefault: true })
+currentCwd = undefined
+currentSession = undefined
 
 // ───────────────────────────── 收尾 ─────────────────────────────
 

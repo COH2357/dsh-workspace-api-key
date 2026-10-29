@@ -21,6 +21,9 @@ session key  →  workspace key  →  system default
 - **Mismatch warning** — if the key you bound was recorded for one provider (say `deepseek-official`) and the session now runs on another, entering that session reports it, because that request would be sent with a key the provider does not accept.
 - **No silent substitution** — neither warning ever changes which key is used. The decision stays with you, which is the whole point: an automatically swapped key would defeat the billing separation.
 - **One-click revert** — clearing a session entry falls back to the workspace key, clearing a workspace entry falls back to the system default.
+- **A search switch per workspace** — every workspace row carries a `同步搜索 API` checkbox. Ticked, the `web_search` / `web_fetch` calls made by sessions in that directory use the key they would use for chat (`session → workspace → system default`); unticked, they keep the key the official 设置 → 插件 → 网页搜索 page manages. A session with its own key always wins, so "sync on, session configured separately" spends the session key, not the search key.
+- **Search warnings that arrive before the failure** — when a search key is configured but `启用新版 Web 搜索 API` is off, or when the new API is on but its key ref is empty, the panel shows a warning banner and the entering-session overlay says it too, in one line you can act on. The overlay stays quiet about search problems when the search provider is not the one in use.
+- **A usage guide** — `使用说明` at the top of the panel recommends two keys: a chat default (`default`) and a search default (`search-default`), so the two budgets stay separate; it also draws the cascade and lists the situations that trigger a warning.
 
 ## How it works
 
@@ -31,6 +34,7 @@ Host half (`lib/index.js`):
 - matches that directory against `workspaceRegistry.list()` after normalizing both sides (absolute, trailing separator removed, lower-cased on Windows);
 - derives a stable ref per level — `DEEPSEEK_API_KEY_WS_<first 16 hex chars of sha1(normalized path), upper-cased>` for a workspace and `DEEPSEEK_API_KEY_SS_<first 16 hex chars of sha1(session id), upper-cased>` for a session (a session id contains `-` and cannot be a ref name) — writes the key through the credentials service, and serves that ref's value;
 - rewrites only refs a provider actually reads: the default ref, every adapter's configured `apiKeyEnv`, and its own generated refs. Every other ref passes through untouched;
+- tells search credentials apart from chat credentials. The official new Search/Fetch API (`web.searchProvider === 'deepseek-search-api'`) resolves its key itself, and it defaults to the same `DEEPSEEK_API_KEY` the chat uses, so the ref alone cannot say why a key is being asked for. The host half therefore wraps `ctx.web.search` / `ctx.web.fetch` in an `AsyncLocalStorage` scope and applies the search rule only when `credentials.resolve` runs inside it — a session's own key first (always), then, if that workspace ticked `同步搜索 API`, the workspace key and then the system default, and otherwise the ref the search plugin configured. The legacy Messages-based search keeps the plain chat cascade, because that route *is* a messages request;
 - builds the session list from the `sessionController` service (`list()`, unwrapping its `{items: […]}` envelope) and falls back to the live `sessions` service (`ctx.get('sessions').list()`), so the panel still has sessions when the controller is missing, throws, or returns an empty list. It hides the two kinds of session the sidebar hides: subagent sessions (`origin: 'subagent'`, or a `parentSession`) and *blank* sessions (created but never prompted — the sidebar shows only the one currently open). Without those two filters one workspace with a single real session listed thirteen;
 - reports its own version and a session probe (`available`, `shape`, `source`, `count`, `withoutCwd`, `subagents`, `samples`, `error`, plus sample workspace paths) in `/wsk-api/state`, so the panel can say *why* no sessions are listed: a stale host half (only a page reload instead of an app restart), a missing `sessionController`, a throwing `list()`, an unexpected envelope shape, or a `cwd` that matches no workspace path;
 - lists a directory that is not a registered workspace only if the sidebar would show it. It cannot decide that itself, because "only the currently open blank session counts" is knowledge the browser side holds (`retainedBy.mainView`), so it sends every such directory plus a `blank` flag per session and a `hiddenBlankDirs` list naming the ones whose sessions are all blank — the browser half applies the same verdict the sidebar does;
@@ -49,6 +53,7 @@ The browser half (`lib/client.js`) registers into the `sidebar.panellist` slot (
 | POST | `/wsk-api/set` | `{scope: 'workspace' \| 'session', path \| sessionId, title, key, provider?}` binds a key; `{useDefault: true}` or an empty key clears it |
 | POST | `/wsk-api/test` | `{scope, path \| sessionId \| ref}` (or `{key}`) runs one real request and returns the verdict; `invalid` marks the flag, `ok` clears it |
 | POST | `/wsk-api/clear-flag` | `{ref}` or a target drops the invalid/quota flag |
+| POST | `/wsk-api/search-sync` | `{path, enabled}` turns a workspace's `同步搜索 API` switch on or off |
 
 Only loopback callers are accepted (`127.0.0.1`, `::1`, `::ffff:127.0.0.1`) with a same-origin or absent `Origin`. No response ever contains a plaintext key, only a mask.
 
@@ -56,12 +61,22 @@ Workspace targets may be directories that are not registered workspaces; such en
 
 ## Install
 
-Install through the market (设置 → 插件市场) once the plugin is listed, or manually:
+Install through the market (设置 → 插件市场) once the plugin is listed, or from npm:
 
 ```sh
-# in the profile directory, e.g. ~/.dsh/profiles/desktop
-pnpm add "dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key"
+# via the DSH CLI, into one profile (web, tui, ...). Desktop's own profile is
+# managed by the Electron app, so install there from its UI.
+dsh plugin --profile web add dsh-workspace-api-key
 ```
+
+The command forwards its arguments to pnpm inside the profile directory, so the equivalent manual form is:
+
+```sh
+# in the profile directory, e.g. ~/.dsh/profiles/web
+pnpm add dsh-workspace-api-key          # or: npm install dsh-workspace-api-key
+```
+
+Pin a version with `dsh-workspace-api-key@0.2.8`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
 
 Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `package.json` and restart DSH. For local development, use a link instead:
 
@@ -72,11 +87,11 @@ Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `p
 ## Tests
 
 ```sh
-node test/host.test.mjs     # 136 assertions
-node test/client.test.mjs   # 145 assertions
+node test/host.test.mjs     # 157 assertions
+node test/client.test.mjs   # 162 assertions
 ```
 
-Neither suite needs a running DSH process. The host suite drives `apply()` against a mock context (fake `credentials`, `workspaceRegistry`, `agents`, `sessionController`, `sessions`, `webServer`, stubbed `fetch`) and covers ref derivation, the session → workspace → default cascade, workspace matching, redirecting a second adapter's `apiKeyEnv`, clearing back to the default, 401/402/429/5xx classification, the loopback and origin checks, state persistence, and the session probe including the `{items}` envelope, the live-session fallback, and subagent and blank sessions being hidden. The client suite loads `lib/client.js` through a minimal `window.__ModuleLoader__` plus a small React runtime, renders the panel and the overlay, and asserts slot registration, the first render, session expand/collapse, per-session saving and testing, sessions recovered from the browser-side store when the host has none (with `displayTitle` winning and subagent sessions hidden), the ungrouped-directory card, the stale and mismatch prompts, the "go configure" hand-off, graceful degradation without a session list, and back-navigation when `ctx.get('layout')` only becomes available after the plugin was applied.
+Neither suite needs a running DSH process. The host suite drives `apply()` against a mock context (fake `credentials`, `workspaceRegistry`, `agents`, `sessionController`, `sessions`, `webServer`, stubbed `fetch`) and covers ref derivation, the session → workspace → default cascade, workspace matching, redirecting a second adapter's `apiKeyEnv`, clearing back to the default, 401/402/429/5xx classification, the loopback and origin checks, state persistence, the session probe including the `{items}` envelope, the live-session fallback, and subagent and blank sessions being hidden, and the search scope with a stand-in `web` service and a stand-in settings service: the legacy route keeping the chat cascade, the new provider keeping its own key, the workspace switch taking over, a session key outranking both, the two search warnings, and the search connection test. The client suite loads `lib/client.js` through a minimal `window.__ModuleLoader__` plus a small React runtime, renders the panel and the overlay, and asserts slot registration, the first render, session expand/collapse, per-session saving and testing, sessions recovered from the browser-side store when the host has none (with `displayTitle` winning and subagent sessions hidden), the ungrouped-directory card, the stale and mismatch prompts, the "go configure" hand-off, graceful degradation without a session list, back-navigation when `ctx.get('layout')` only becomes available after the plugin was applied, and the search UI: the switch on every workspace row, the `/wsk-api/search-sync` call it makes, the warning banner, and the usage dialog.
 
 ## Requirements and limits
 
@@ -84,6 +99,7 @@ Neither suite needs a running DSH process. The host suite drives `apply()` again
 - One key per level: a session has a single key whichever provider route reads it, and a key recorded for one provider is reported as a mismatch when the session runs on another. Model changes inside one provider are not treated as a mismatch, because a DeepSeek key is account-wide.
 - Sessions are matched to a workspace by their directory (`cwd`). The host's own `list()` skips stored sessions that never got a `cwd`, and the live-session fallback only knows sessions that are currently loaded, so the panel may show fewer sessions than the sidebar. Sessions visible only in the browser-side store carry no `cwd` of their own beyond the one the sidebar knows.
 - The connection test speaks the Anthropic Messages shape (`POST <baseURL>/messages` with `x-api-key` and `anthropic-version: 2023-06-01`), which is what the DeepSeek route uses. A provider that speaks a different protocol can still have keys bound per level, but the test may report a failure for a key that works.
+- Search support needs a DSH build that ships the official Search/Fetch API (`web-deepseek-api`, the 设置 → 插件 → 网页搜索 page with `启用新版 Web 搜索 API`). On a build without it the plugin simply never sees a search request: the switch stays visible, and the panel reports the legacy Messages channel instead of guessing.
 - Keys are stored through the credentials service in `$DSH_HOME/.credentials.yaml` under `refs:`, in plaintext, exactly like the default key. They are not written into session logs, the plugin's state file, or the plugin directory.
 - Matching is textual after normalization. If a session's `cwd` is a symlink or junction to a registered workspace path, it will not match and the level above is used.
 - Uninstalling the plugin leaves the generated `*_WS_*` / `*_SS_*` refs in the credentials file; remove them from the Models page.

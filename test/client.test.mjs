@@ -201,6 +201,14 @@ function byTag(node, type) {
   return flatten(node).filter((n) => n.type === type)
 }
 
+/**
+ * 文本输入框 = 所有 input 里排除复选框。
+ * 工作区行上的「同步搜索 API」是 <input type="checkbox">，不能和 key 输入框混在一起数。
+ */
+function textInputs(node) {
+  return flatten(node).filter((n) => n.type === 'input' && n.props?.type !== 'checkbox')
+}
+
 function buttons(node) {
   return flatten(node).filter((n) => n.type === 'button')
 }
@@ -482,10 +490,15 @@ function snapshot() {
       : [],
     statePath: 'C:\\Users\\x\\.dsh\\storages\\dsh-workspace-api-key.json',
   }
+  // 搜索通道总览 + 每个目录的同步标记（宿主 /state 的真实字段）。
+  out.search = searchState
+  for (const ws of [...(out.workspaces ?? []), ...(out.ungrouped ?? [])]) {
+    ws.searchSync = searchSyncPaths.includes(ws.path)
+  }
   if (staleHost) {
     // 0.1.0 的宿主只回这些字段：没有 storeVersion / pluginVersion / sessionProbe /
     // ungrouped，工作区行也没有 sessions。
-    for (const key of ['storeVersion', 'pluginVersion', 'sessionProbe', 'sessionListAvailable', 'ungrouped', 'workspacePathSample']) {
+    for (const key of ['storeVersion', 'pluginVersion', 'sessionProbe', 'sessionListAvailable', 'ungrouped', 'workspacePathSample', 'search']) {
       delete out[key]
     }
     for (const ws of out.workspaces) delete ws.sessions
@@ -536,6 +549,30 @@ function checkPayload(sessionId) {
 
 const calls = []
 
+/**
+ * 宿主 /state 里的 search 段：面板用它画「搜索通道」诊断、同步复选框和提醒条。
+ * 默认是旧的 Messages 通道（官方「启用新版 Web 搜索 API」没打开）。
+ */
+let searchState = {
+  channel: 'messages',
+  apiChannel: false,
+  searchProvider: 'deepseek-official',
+  fetchProvider: 'http',
+  baseURL: 'https://api.deepseek.com/v1/tools',
+  count: 10,
+  keyRef: 'DEEPSEEK_API_KEY',
+  keyRefConfigured: true,
+  keyMasked: MASK_DEFAULT,
+  keySource: 'file',
+  keyWritable: true,
+  literalKey: false,
+  syncCount: 0,
+  syncPaths: [],
+  warnings: [],
+}
+/** 勾了「同步搜索 API」的目录（宿主按规范化路径存）。 */
+let searchSyncPaths = []
+
 globalThis.window.fetch = async (url, init) => {
   const path = String(url).replace('/wsk-api', '')
   const body = init?.body ? JSON.parse(init.body) : undefined
@@ -564,6 +601,16 @@ globalThis.window.fetch = async (url, init) => {
   } else if (path === '/test') {
     // 宿主 /test 只返回测试结果（lib/index.js:803），界面靠随后再拉一次 /state 刷新。
     payload = { ok: true, test: { ok: true, verdict: 'ok', status: 200, latencyMs: 123, detail: '连接正常，key 可用' }, keyMasked: 'sk-new…alue' }
+  } else if (path === '/search-sync') {
+    // 宿主写 state.searchSync（规范化路径），随后整份 snapshot 回给界面。
+    const dir = body.path
+    if (body.enabled === false) {
+      searchSyncPaths = searchSyncPaths.filter((p) => p !== dir)
+    } else if (!searchSyncPaths.includes(dir)) {
+      searchSyncPaths = [...searchSyncPaths, dir]
+    }
+    searchState = { ...searchState, syncCount: searchSyncPaths.length, syncPaths: [...searchSyncPaths] }
+    payload = snapshot()
   } else if (path === '/clear-flag') {
     const ref = body.ref ?? (body.scope === 'session'
       ? REF_S1
@@ -655,7 +702,7 @@ eq('弹窗已关闭', byClass(tree, 'wsk-overlay').length, 0)
 
 console.log('\n[5] 「配置」展开编辑器并保存专属 key')
 click(findButton(tree, '配置'))
-const inputs = byTag(tree, 'input')
+const inputs = textInputs(tree)
 eq('出现一个 key 输入框', inputs.length, 1)
 eq('输入框类型', inputs[0].props.type, 'text')
 inputs[0].props.onChange({ target: { value: 'sk-new-secret-value' } })
@@ -669,7 +716,7 @@ check('发出了 /set', setCall !== undefined, JSON.stringify(calls.map((c) => c
 eq('/set 带上了工作区路径', setCall?.body?.path, WS_A)
 eq('/set 带上了新 key', setCall?.body?.key, 'sk-new-secret-value')
 check('保存后提示成功', textOf(tree).includes('已保存专属 key'), textOf(tree).slice(0, 200))
-eq('编辑器已收起', byTag(tree, 'input').length, 0)
+eq('编辑器已收起', textInputs(tree).length, 0)
 check('保存后失效标记被清除', !textOf(tree).includes('key 已失效'))
 check('保存后 alpha 显示「专属 key」徽标', textOf(tree).includes('专属 key'), textOf(tree).slice(0, 200))
 
@@ -737,7 +784,7 @@ check('会话行显示生效 key 掩码', textOf(tree).includes('生效 key'))
 console.log('\n[12] 会话级：配置并保存专属 key')
 const s1Row = () => flatten(tree).find((n) => n.props?.className === 'wsk-sess' && textOf(n).includes('会话一'))
 click(findButton(s1Row(), '配置'))
-const s1Inputs = byTag(tree, 'input')
+const s1Inputs = textInputs(tree)
 eq('会话编辑器只出现一个输入框', s1Inputs.length, 1)
 check('编辑器说明当前生效层级', textOf(tree).includes('当前生效：'), textOf(tree).slice(-260))
 s1Inputs[0].props.onChange({ target: { value: 'sk-session-secret' } })
@@ -790,7 +837,7 @@ registeredCtx.lastPanel = 'unset'
 click(findButton(mismatchDialog, '去配置'))
 eq('主区切到本插件面板', registeredCtx.lastPanel, 'workspace-api-key')
 await mount(page)
-check('面板直接打开了该会话的编辑器', byTag(tree, 'input').length === 1, String(byTag(tree, 'input').length))
+check('面板直接打开了该会话的编辑器', textInputs(tree).length === 1, String(textInputs(tree).length))
 check('编辑器里是该会话的凭据引用', textOf(tree).includes('DEEPSEEK_API_KEY_SS_SESSION-2'), textOf(tree).slice(-320))
 
 console.log('\n[17] 进入会话时的提醒：key 已失效')
@@ -999,6 +1046,87 @@ check('当前空会话的目录会列出来', textOf(tree).includes('未分组�
 check('并带上目录名', textOf(tree).includes('blank-only'), textOf(tree).slice(-500))
 hostBlankUngroupedRows = false
 clientExtraSessions = []
+await mount(page)
+
+console.log('\n[30] 搜索 API：同步复选框、使用说明、以及「配了却没用上」的提醒')
+searchState = {
+  ...searchState,
+  channel: 'api',
+  apiChannel: true,
+  searchProvider: 'deepseek-search-api',
+  fetchProvider: 'deepseek-fetch-api',
+  keyRef: 'DEEPSEEK_SEARCH_KEY',
+  keyMasked: 'sk-sea…ault',
+  syncCount: 0,
+  syncPaths: [],
+  warnings: [],
+}
+searchSyncPaths = []
+await mount(page)
+check('每个目录都渲染「同步搜索 API」复选框', textOf(tree).includes('同步搜索 API'), textOf(tree).slice(0, 400))
+eq('复选框数量 = 工作区 + 未分组目录', flatten(tree).filter((n) => n.type === 'input' && n.props?.type === 'checkbox').length, 3)
+check('未勾选时说明「搜索用搜索插件里的 key」', textOf(tree).includes('搜索用搜索插件里的 key'), textOf(tree).slice(0, 600))
+check('诊断行报出搜索通道', textOf(tree).includes('搜索通道：新版 API'), textOf(tree).slice(-700))
+
+// 勾选 alpha 的同步：发 /search-sync，并把返回的 snapshot 应用回来
+calls.length = 0
+const checkboxes = flatten(tree).filter((n) => n.type === 'input' && n.props?.type === 'checkbox')
+const alphaBox = checkboxes[0]
+check('第一个复选框属于 alpha 行', alphaBox !== undefined)
+alphaBox.props.onChange({ target: { checked: true } })
+await settle()
+const syncCall = calls.find((c) => c.path === '/search-sync')
+check('发出了 /search-sync', syncCall !== undefined, JSON.stringify(calls.map((c) => c.path)))
+eq('/search-sync 带上目录路径', syncCall?.body?.path, WS_A)
+eq('/search-sync 带上 enabled', syncCall?.body?.enabled, true)
+check('勾选后提示改成了「搜索用这里的 key」', textOf(tree).includes('搜索用这里的 key'), textOf(tree).slice(0, 700))
+check('已经报了同步数量', textOf(tree).includes('已同步 1 个目录'), textOf(tree).slice(-700))
+
+// 提醒条：宿主管 warnings，界面只负责显示
+searchState = {
+  ...searchState,
+  warnings: [{
+    code: 'search-key-idle',
+    level: 'warn',
+    title: '搜索 key 已配置，但「启用新版 Web 搜索 API」没打开',
+    detail: '当前搜索走的是 DeepSeek Messages 通道，所以 DEEPSEEK_SEARCH_KEY 这把 key 不会被使用。',
+  }],
+}
+await mount(page)
+const warnBars = byClass(tree, 'wsk-msg').filter((n) => textOf(n).includes('搜索 key 已配置'))
+check('提醒条出现在面板顶部', warnBars.length >= 1, textOf(tree).slice(0, 400))
+check('提醒条带处理说明', textOf(tree).includes('不会被使用'), textOf(tree).slice(0, 500))
+searchState = { ...searchState, warnings: [] }
+
+// 「使用说明」弹窗：推荐的 default + search-default 用法
+await mount(page)
+const helpBtn = findButton(tree, '使用说明')
+check('顶部有「使用说明」按钮', helpBtn !== undefined, textOf(tree).slice(0, 200))
+click(helpBtn)
+await settle()
+const helpDialogs = byClass(tree, 'wsk-overlay')
+eq('打开了一个弹窗', helpDialogs.length, 1)
+const helpText = textOf(helpDialogs[0])
+check('说明里推荐两把 key 的分工', helpText.includes('search-default') && helpText.includes('default'), helpText.slice(0, 400))
+check('说明里写了层级（会话优先）', helpText.includes('会话') && helpText.includes('工作区'), helpText.slice(0, 400))
+click(findButton(helpDialogs[0], '知道了'))
+await settle()
+eq('说明弹窗可关闭', byClass(tree, 'wsk-overlay').length, 0)
+
+// 复位，避免影响后续用例
+searchState = {
+  ...searchState,
+  channel: 'messages',
+  apiChannel: false,
+  searchProvider: 'deepseek-official',
+  fetchProvider: 'http',
+  keyRef: 'DEEPSEEK_API_KEY',
+  keyMasked: MASK_DEFAULT,
+  syncCount: 0,
+  syncPaths: [],
+  warnings: [],
+}
+searchSyncPaths = []
 await mount(page)
 
 console.log(`\n${checks - failures}/${checks} 通过`)

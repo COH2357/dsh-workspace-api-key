@@ -2,3 +2,7 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# test harness scratch (memory-fs runner + its fake DSH_HOME)
+test/.tmp-dsh-home/
+test/.tmp-run.mjs
