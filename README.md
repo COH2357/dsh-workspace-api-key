@@ -21,7 +21,8 @@ session key  →  workspace key  →  system default
 - **Mismatch warning** — if the key you bound was recorded for one provider (say `deepseek-official`) and the session now runs on another, entering that session reports it, because that request would be sent with a key the provider does not accept.
 - **No silent substitution** — neither warning ever changes which key is used. The decision stays with you, which is the whole point: an automatically swapped key would defeat the billing separation.
 - **One-click revert** — clearing a session entry falls back to the workspace key, clearing a workspace entry falls back to the system default.
-- **A search default key of its own** — the `搜索默认 key` card binds a key to `DEEPSEEK_API_KEY_SEARCH`, so search can be billed apart from chat without editing the official configuration: a session's own key wins, then a synced workspace's chat cascade, then this key, then whatever the official search page stores.
+- **A search default key of its own** — the `搜索默认 key` card binds a key to `DEEPSEEK_API_KEY_SEARCH`, so search can be billed apart from chat: a session's own key wins, then a synced workspace's chat cascade, then this key, then whatever the official search page stores.
+- **Takes over the official search key field** — on startup, while the new Web Search API is on, the plugin points the official `web-deepseek-api` / `web-search-deepseek` entry at `DEEPSEEK_API_KEY_SEARCH` (only that `apiKeyEnv` pointer, never a key value). The `设置 → 插件 → 网页搜索` field then edits the same search key this panel does, so it can no longer overwrite your chat key, and there is no second place where a search key can hide.
 - **A search switch per workspace** — every workspace row carries a `同步搜索 API` checkbox. Ticked, the `web_search` / `web_fetch` calls made by sessions in that directory use the key they would use for chat (`session → workspace → system default`); unticked, they keep the key the official 设置 → 插件 → 网页搜索 page manages. A session with its own key always wins, so "sync on, session configured separately" spends the session key, not the search key.
 - **Search warnings that arrive before the failure** — when a search key is configured but `启用新版 Web 搜索 API` is off, or when the new API is on but its key ref is empty, the panel shows a warning banner and the entering-session overlay says it too, in one line you can act on. The overlay stays quiet about search problems when the search provider is not the one in use.
 - **A usage guide** — `使用说明` at the top of the panel recommends two keys: a chat default (`default`) and a search default (`search-default`), so the two budgets stay separate; it also draws the cascade and lists the situations that trigger a warning.
@@ -78,7 +79,7 @@ The command forwards its arguments to pnpm inside the profile directory, so the 
 pnpm add dsh-workspace-api-key          # or: npm install dsh-workspace-api-key
 ```
 
-Pin a version with `dsh-workspace-api-key@0.2.11`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
+Pin a version with `dsh-workspace-api-key@0.2.12`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
 
 Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `package.json` and restart DSH. For local development, use a link instead:
 
@@ -89,8 +90,8 @@ Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `p
 ## Tests
 
 ```sh
-node test/host.test.mjs     # 165 assertions
-node test/client.test.mjs   # 170 assertions
+node test/host.test.mjs     # 173 assertions
+node test/client.test.mjs   # 173 assertions
 ```
 
 Neither suite needs a running DSH process. The host suite drives `apply()` against a mock context (fake `credentials`, `workspaceRegistry`, `agents`, `sessionController`, `sessions`, `webServer`, stubbed `fetch`) and covers ref derivation, the session → workspace → default cascade, workspace matching, redirecting a second adapter's `apiKeyEnv`, clearing back to the default, 401/402/429/5xx classification, the loopback and origin checks, state persistence, the session probe including the `{items}` envelope, the live-session fallback, and subagent and blank sessions being hidden, and the search scope with a stand-in `web` service and a stand-in settings service: the legacy route keeping the chat cascade, the new provider keeping its own key, the workspace switch taking over, a session key outranking both, the panel's own search default key being used and cleared, the three search warnings, and the search connection test. The client suite loads `lib/client.js` through a minimal `window.__ModuleLoader__` plus a small React runtime, renders the panel and the overlay, and asserts slot registration, the first render, session expand/collapse, per-session saving and testing, sessions recovered from the browser-side store when the host has none (with `displayTitle` winning and subagent sessions hidden), the ungrouped-directory card, the stale and mismatch prompts, the "go configure" hand-off, graceful degradation without a session list, back-navigation when `ctx.get('layout')` only becomes available after the plugin was applied, and the search UI: the switch on every workspace row, the `/wsk-api/search-sync` call it makes, the warning banner, and the usage dialog.

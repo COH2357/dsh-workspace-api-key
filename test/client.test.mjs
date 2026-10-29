@@ -584,8 +584,17 @@ globalThis.window.fetch = async (url, init) => {
     const query = String(path).slice(String(path).indexOf('?') + 1)
     payload = checkPayload(new URLSearchParams(query).get('sessionId'))
   } else if (path === '/set' && body?.scope === 'search-default') {
-    // 面板自己持有的搜索默认 key（不写 overrides，只改 searchState）
-    if (body.useDefault === true || body.key === undefined || body.key === '') {
+    // 面板自己持有的搜索默认 key（不写 overrides，只改 searchState）。
+    // adopt = 只把官方页的 ref 指到插件自有 ref；宿主成功后会回报 bound: { ok: true }。
+    if (body.adopt === true) {
+      searchState = {
+        ...searchState,
+        officialRef: 'DEEPSEEK_API_KEY_SEARCH',
+        officialShared: false,
+        ownedConfigured: true,
+        defaultRef: 'DEEPSEEK_API_KEY_SEARCH',
+      }
+    } else if (body.useDefault === true || body.key === undefined || body.key === '') {
       searchState = { ...searchState, defaultConfigured: false, defaultKeyMasked: undefined }
     } else {
       searchState = { ...searchState, defaultConfigured: true, defaultKeyMasked: 'sk-sea…arch' }
@@ -1065,6 +1074,9 @@ searchState = {
   fetchProvider: 'deepseek-fetch-api',
   keyRef: 'DEEPSEEK_SEARCH_KEY',
   keyMasked: 'sk-sea…ault',
+  officialRef: 'DEEPSEEK_API_KEY',
+  officialShared: true,
+  ownedConfigured: false,
   syncCount: 0,
   syncPaths: [],
   warnings: [],
@@ -1144,6 +1156,26 @@ const defaultSet = calls.find((c) => c.path === '/set' && c.body?.scope === 'sea
 check('保存发出 /set（search-default）', defaultSet !== undefined, JSON.stringify(calls.map((c) => c.path)))
 eq('保存带上了 key', defaultSet?.body?.key, 'sk-search-own')
 check('保存后显示已配置', textOf(tree).includes('已配置'), textOf(tree).slice(0, 600))
+
+// 官方页还指向聊天那把、而插件里已经有搜索默认 key → 给出一键「同步到官方设置」
+searchState = {
+  ...searchState,
+  officialRef: 'DEEPSEEK_API_KEY',
+  officialShared: true,
+  ownedConfigured: true,
+  defaultConfigured: true,
+  defaultKeyMasked: 'sk-sea…arch',
+}
+await mount(page)
+const syncCard = byClass(tree, 'wsk-card').find((n) => textOf(n).includes('搜索默认 key'))
+check('官方仍共用聊天 key 时给出「同步到官方设置」', findButton(syncCard ?? tree, '同步到官方设置') !== undefined,
+  textOf(syncCard ?? tree).slice(0, 600))
+calls.length = 0
+click(findButton(syncCard ?? tree, '同步到官方设置'))
+await settle()
+const adoptCall = calls.find((c) => c.path === '/set' && c.body?.adopt === true)
+check('同步发出 /set（adopt）', adoptCall !== undefined, JSON.stringify(calls.map((c) => c.path)))
+check('同步后说明两处同源', textOf(tree).includes('已由本插件接管'), textOf(tree).slice(0, 800))
 
 // 复位，避免影响后续用例
 searchState = {

@@ -162,6 +162,9 @@ const webSettings = {
   count: 10,
 }
 const webCalls = []
+/** 记录插件对官方设置的改写，验证「同步到官方插件」确实发生。 */
+const settingsUpdates = []
+let settingsRevision = 0
 const web = {
   async search(request) {
     const used = await credentials.resolve(webSettings.apiKeyEnv)
@@ -208,9 +211,18 @@ const settings = {
       { ns: 'agent-default-model', value: { model: 'deepseek-flash' } },
       // 官方「网页搜索」设置：开关体现为 provider 选择，key 引用在各自命名空间。
       { ns: 'web', value: { searchProvider: webSettings.searchProvider, fetchProvider: webSettings.fetchProvider } },
-      { ns: 'web-deepseek-api', value: { apiKeyEnv: webSettings.apiKeyEnv, baseURL: webSettings.baseURL, count: webSettings.count } },
-      { ns: 'web-search-deepseek', value: { apiKeyEnv: webSettings.apiKeyEnv } },
+      { ns: 'web-deepseek-api', value: { apiKeyEnv: webSettings.apiKeyEnv, baseURL: webSettings.baseURL, count: webSettings.count }, revision: settingsRevision },
+      { ns: 'web-search-deepseek', value: { apiKeyEnv: webSettings.apiKeyEnv }, revision: settingsRevision },
     ]
+  },
+  /** 插件保存搜索默认 key 时会把官方两套搜索插件的 apiKeyEnv 指过来（volatile 字段）。 */
+  async update(ns, patch, expectedRevision) {
+    if (expectedRevision !== undefined && expectedRevision !== settingsRevision) throw new Error('settings revision conflict')
+    if (patch?.apiKeyEnv !== undefined) {
+      webSettings.apiKeyEnv = patch.apiKeyEnv
+      settingsRevision += 1
+      settingsUpdates.push({ ns, patch })
+    }
   },
   get(section) {
     if (section === 'llm-deepseek') return { baseURL: 'https://api.deepseek.com' }
@@ -799,6 +811,30 @@ webCalls.length = 0
 await web.search({ query: 'own-default' })
 eq('没同步时搜索优先用面板里的搜索默认 key', webCalls[0]?.key, 'sk-search-own')
 eq('搜索默认 key 不影响聊天通道（仍是工作区 key）', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-beta-workspace-1')
+
+// 「同步到官方插件」：官方页还指向聊天那把时，保存会把官方 apiKeyEnv 改到插件自有 ref，
+// 于是官方「网页搜索」页那个 API Key 输入框与面板改的是同一把 key。
+const chatKeyBeforeBind = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value
+webSettings.apiKeyEnv = 'DEEPSEEK_API_KEY'
+webCalls.length = 0
+const boundSave = await callRoute('/set', 'POST', { scope: 'search-default', key: 'sk-search-bound' })
+check('保存时改写了官方设置', settingsUpdates.length > 0, String(settingsUpdates.length))
+eq('官方 apiKeyEnv 指向插件自有 ref', webSettings.apiKeyEnv, 'DEEPSEEK_API_KEY_SEARCH')
+eq('面板报出官方 ref 已对齐', boundSave.body.search?.officialRef, 'DEEPSEEK_API_KEY_SEARCH')
+eq('面板不再认为官方与聊天共用', boundSave.body.search?.officialShared, false)
+await web.search({ query: 'bound-search' })
+eq('绑定后搜索用搜索默认 key', webCalls[0]?.key, 'sk-search-bound')
+eq('绑定没有动聊天 key', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, chatKeyBeforeBind)
+
+// 只对齐、不改 key：key 已在自有 ref 里，但官方页又被改回聊天那把。
+webSettings.apiKeyEnv = 'DEEPSEEK_API_KEY'
+const adopted = await callRoute('/set', 'POST', { scope: 'search-default', adopt: true })
+eq('adopt 把官方 ref 改回插件自有 ref', adopted.body.search?.officialRef, 'DEEPSEEK_API_KEY_SEARCH')
+eq('adopt 保留已保存的 key', adopted.body.search?.defaultConfigured, true)
+
+// 还原官方 ref，后续用例继续按「官方指向别的 ref」走
+webSettings.apiKeyEnv = 'DEEPSEEK_SEARCH_KEY'
+creds.set('DEEPSEEK_SEARCH_KEY', 'sk-search-default')
 
 // 工作区勾同步时，层级 key 压过搜索默认 key
 await callRoute('/search-sync', 'POST', { path: WS_B, enabled: true })
