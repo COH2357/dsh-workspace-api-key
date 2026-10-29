@@ -780,6 +780,49 @@ eq('搜索测试 → ok', searchTest.body.test?.verdict, 'ok')
 check('搜索测试打的是 /search 端点', String(lastCall()?.url).endsWith('/search'), String(lastCall()?.url))
 globalThis.fetch = realFetch
 
+// 面板自己持有的「搜索默认 key」：优先级在会话 key 之下、官方搜索页那把之上
+webSettings.searchProvider = 'deepseek-search-api'
+webSettings.fetchProvider = 'deepseek-fetch-api'
+currentCwd = WS_B
+currentSession = undefined
+const saveSearchDefault = await callRoute('/set', 'POST', { scope: 'search-default', key: 'sk-search-own' })
+eq('搜索默认 key 写入成功', saveSearchDefault.body.ok, true)
+eq('state 报出搜索默认 key 已配置', saveSearchDefault.body.search?.defaultConfigured, true)
+check('搜索默认 key 有掩码', typeof saveSearchDefault.body.search?.defaultKeyMasked === 'string',
+  String(saveSearchDefault.body.search?.defaultKeyMasked))
+
+webCalls.length = 0
+await web.search({ query: 'own-default' })
+eq('没同步时搜索优先用面板里的搜索默认 key', webCalls[0]?.key, 'sk-search-own')
+eq('搜索默认 key 不影响聊天通道（仍是工作区 key）', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-beta-workspace-1')
+
+// 工作区勾同步时，层级 key 压过搜索默认 key
+await callRoute('/search-sync', 'POST', { path: WS_B, enabled: true })
+webCalls.length = 0
+await web.search({ query: 'synced-over-own' })
+eq('勾了同步 → 搜索默认 key 让位给工作区层级', webCalls[0]?.key, (await credentials.resolve('DEEPSEEK_API_KEY'))?.value)
+await callRoute('/search-sync', 'POST', { path: WS_B, enabled: false })
+
+// 清掉搜索默认 key → 回落到官方搜索页配的那把
+await callRoute('/set', 'POST', { scope: 'search-default', useDefault: true })
+creds.set('DEEPSEEK_SEARCH_KEY', 'sk-search-default')
+webCalls.length = 0
+await web.search({ query: 'own-cleared' })
+eq('清掉搜索默认 key → 回落官方搜索页的 key', webCalls[0]?.key, 'sk-search-default')
+
+// 配了搜索默认 key 却把新版开关关了 → 提醒它不会生效
+await callRoute('/set', 'POST', { scope: 'search-default', key: 'sk-search-own' })
+webSettings.searchProvider = 'deepseek-official'
+webSettings.fetchProvider = 'http'
+const ownIdle = (await callRoute('/state', 'GET')).body
+check('搜索默认 key 配了但新版没开 → 提醒',
+  (ownIdle.search?.warnings ?? []).some((w) => w.code === 'search-default-idle'),
+  JSON.stringify(ownIdle.search?.warnings))
+await callRoute('/set', 'POST', { scope: 'search-default', useDefault: true })
+webSettings.searchProvider = 'deepseek-official'
+webSettings.fetchProvider = 'http'
+currentCwd = undefined
+
 // 复位，避免影响后续用例
 creds.set('DEEPSEEK_SEARCH_KEY', 'sk-search-default')
 webSettings.searchProvider = 'deepseek-official'

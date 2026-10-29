@@ -583,6 +583,14 @@ globalThis.window.fetch = async (url, init) => {
   else if (path.startsWith('/check')) {
     const query = String(path).slice(String(path).indexOf('?') + 1)
     payload = checkPayload(new URLSearchParams(query).get('sessionId'))
+  } else if (path === '/set' && body?.scope === 'search-default') {
+    // 面板自己持有的搜索默认 key（不写 overrides，只改 searchState）
+    if (body.useDefault === true || body.key === undefined || body.key === '') {
+      searchState = { ...searchState, defaultConfigured: false, defaultKeyMasked: undefined }
+    } else {
+      searchState = { ...searchState, defaultConfigured: true, defaultKeyMasked: 'sk-sea…arch' }
+    }
+    payload = snapshot()
   } else if (path === '/set') {
     const ref = body.scope === 'session'
       ? (body.sessionId === 'session-1' ? REF_S1 : `DEEPSEEK_API_KEY_SS_${String(body.sessionId).toUpperCase()}`)
@@ -1112,6 +1120,30 @@ check('说明里写了层级（会话优先）', helpText.includes('会话') && 
 click(findButton(helpDialogs[0], '知道了'))
 await settle()
 eq('说明弹窗可关闭', byClass(tree, 'wsk-overlay').length, 0)
+
+// 搜索默认 key：「配置 → 保存」走 /set 的 search-default 作用域
+await mount(page)
+const searchCard = byClass(tree, 'wsk-card').find((n) => textOf(n).includes('搜索默认 key'))
+check('有「搜索默认 key」卡片', searchCard !== undefined, textOf(tree).slice(0, 500))
+check('卡片显示搜索默认 key 的 ref', textOf(searchCard ?? tree).includes('DEEPSEEK_API_KEY_SEARCH'),
+  textOf(searchCard ?? tree).slice(0, 300))
+const openSearchBtn = findButton(searchCard ?? tree, '配置')
+check('卡片上有「配置」按钮', openSearchBtn !== undefined)
+click(openSearchBtn)
+await settle()
+const searchInput = flatten(tree).find((n) => n.type === 'input' && n.props?.type === 'text' && String(n.props?.placeholder).includes('官方搜索页'))
+check('展开后有 key 输入框', searchInput !== undefined)
+searchInput.props.onChange({ target: { value: 'sk-search-own' } })
+await settle()
+const saveSearchBtn = findButton(byClass(tree, 'wsk-card').find((n) => textOf(n).includes('搜索默认 key')) ?? tree, '保存')
+check('卡片上有「保存」按钮', saveSearchBtn !== undefined)
+calls.length = 0
+click(saveSearchBtn)
+await settle()
+const defaultSet = calls.find((c) => c.path === '/set' && c.body?.scope === 'search-default')
+check('保存发出 /set（search-default）', defaultSet !== undefined, JSON.stringify(calls.map((c) => c.path)))
+eq('保存带上了 key', defaultSet?.body?.key, 'sk-search-own')
+check('保存后显示已配置', textOf(tree).includes('已配置'), textOf(tree).slice(0, 600))
 
 // 复位，避免影响后续用例
 searchState = {
