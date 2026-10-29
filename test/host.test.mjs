@@ -198,19 +198,23 @@ const llm = {
   ]),
 }
 
+// 真实 settings 服务只有 describe()（按 profile 条目 id 键控、每行带 ns 与活值），没有 get(ns)。
+// 这里就按真实形状造，插件若还按 get 读就会整个功能失效——这正是要守住的回归点。
 const settings = {
+  describe() {
+    return [
+      // 故意给一个**错的** baseURL：适配器 options() 才是权威来源，测试要证明它优先。
+      { ns: 'llm-deepseek', value: { baseURL: 'https://api.deepseek.com' } },
+      { ns: 'agent-default-model', value: { model: 'deepseek-flash' } },
+      // 官方「网页搜索」设置：开关体现为 provider 选择，key 引用在各自命名空间。
+      { ns: 'web', value: { searchProvider: webSettings.searchProvider, fetchProvider: webSettings.fetchProvider } },
+      { ns: 'web-deepseek-api', value: { apiKeyEnv: webSettings.apiKeyEnv, baseURL: webSettings.baseURL, count: webSettings.count } },
+      { ns: 'web-search-deepseek', value: { apiKeyEnv: webSettings.apiKeyEnv } },
+    ]
+  },
   get(section) {
-    // 故意给一个**错的** baseURL：适配器 options() 才是权威来源，测试要证明它优先。
     if (section === 'llm-deepseek') return { baseURL: 'https://api.deepseek.com' }
     if (section === 'agent-default-model') return { model: 'deepseek-flash' }
-    // 官方「网页搜索」设置：开关体现为 provider 选择，key 引用在各自命名空间。
-    if (section === 'web') {
-      return { searchProvider: webSettings.searchProvider, fetchProvider: webSettings.fetchProvider }
-    }
-    if (section === 'web-deepseek-api') {
-      return { apiKeyEnv: webSettings.apiKeyEnv, baseURL: webSettings.baseURL, count: webSettings.count }
-    }
-    if (section === 'web-search-deepseek') return { apiKeyEnv: webSettings.apiKeyEnv }
     return undefined
   },
 }

@@ -78,7 +78,7 @@ dsh plugin --profile web add dsh-workspace-api-key
 pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api-key
 ```
 
-锁版本用 `dsh-workspace-api-key@0.2.9`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
+锁版本用 `dsh-workspace-api-key@0.2.10`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
 
 然后把 `"dsh-workspace-api-key"` 加进该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH。本地开发用 link 代替：
 

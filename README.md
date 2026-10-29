@@ -78,7 +78,7 @@ The command forwards its arguments to pnpm inside the profile directory, so the 
 pnpm add dsh-workspace-api-key          # or: npm install dsh-workspace-api-key
 ```
 
-Pin a version with `dsh-workspace-api-key@0.2.9`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
+Pin a version with `dsh-workspace-api-key@0.2.10`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
 
 Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `package.json` and restart DSH. For local development, use a link instead:
 
