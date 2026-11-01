@@ -828,12 +828,24 @@ eq('搜索默认 key 不影响聊天通道（仍是工作区 key）', (await cre
 // 于是官方「网页搜索」页那个 API Key 输入框与面板改的是同一把 key。
 const chatKeyBeforeBind = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value
 webSettings.apiKeyEnv = 'DEEPSEEK_API_KEY'
+creds.set('DEEPSEEK_API_KEY_SEARCH', 'sk-search-bound')
 webCalls.length = 0
+const beforeBindState = await callRoute('/state', 'GET')
+check(
+  '官方还指着聊天那把时提醒「同步到官方设置」',
+  (beforeBindState.body.search?.warnings ?? []).some((item) => item.code === 'search-official-shared'),
+  JSON.stringify((beforeBindState.body.search?.warnings ?? []).map((item) => item.code)),
+)
 const boundSave = await callRoute('/set', 'POST', { scope: 'search-default', key: 'sk-search-bound' })
 check('保存时改写了官方设置', settingsUpdates.length > 0, String(settingsUpdates.length))
 eq('官方 apiKeyEnv 指向插件自有 ref', webSettings.apiKeyEnv, 'DEEPSEEK_API_KEY_SEARCH')
 eq('面板报出官方 ref 已对齐', boundSave.body.search?.officialRef, 'DEEPSEEK_API_KEY_SEARCH')
 eq('面板不再认为官方与聊天共用', boundSave.body.search?.officialShared, false)
+check(
+  '接管之后不再误报「官方页还指着聊天那把」',
+  !(boundSave.body.search?.warnings ?? []).some((item) => item.code === 'search-official-shared'),
+  JSON.stringify((boundSave.body.search?.warnings ?? []).map((item) => item.code)),
+)
 await web.search({ query: 'bound-search' })
 eq('绑定后搜索用搜索默认 key', webCalls[0]?.key, 'sk-search-bound')
 eq('绑定没有动聊天 key', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, chatKeyBeforeBind)
