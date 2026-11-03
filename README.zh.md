@@ -36,7 +36,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - 把该目录与 `workspaceRegistry.list()` 做规范化后比对（绝对化、去掉尾部分隔符、Windows 折大小写）；
 - 由每一层派生出稳定的 ref —— 工作区是 `DEEPSEEK_API_KEY_WS_<sha1(规范化路径) 前 16 位十六进制大写>`，会话是 `DEEPSEEK_API_KEY_SS_<sha1(会话 id) 前 16 位十六进制大写>`（会话 id 含 `-`，不能直接当 ref 名）——通过凭据服务写入 key，并返回这个 ref 的值；
 - 只改写 provider 真正会读的 ref：默认 ref、每个适配器配置的 `apiKeyEnv`，以及插件自己生成的 ref；其它 ref 原样透传；
-- 把「搜索请求」和「聊天请求」分开。官方新版 Search/Fetch API（`web.searchProvider === 'deepseek-search-api'`）自己解析 key，而它默认读的又是聊天用的 `DEEPSEEK_API_KEY`，所以光看 ref 分不出这次要 key 是为了什么。宿主半边因此把 `ctx.web.search` / `ctx.web.fetch` 包进一个 `AsyncLocalStorage` 作用域，只有当 `credentials.resolve` 在这个作用域里被调用时才套用搜索规则：先看会话自己的 key（永远最优先），再看该工作区有没有勾「同步搜索 API」，勾了就依次用工作区 key、系统默认 key；没勾时先用插件面板自己持有的搜索默认 ref（若配了），最后才用搜索插件配置的那个 ref。旧版基于 Messages 的搜索仍然走原来的聊天层级，因为那条路线本身就是一次 messages 请求；
+- 把「搜索请求」和「聊天请求」分开——**按 ref 分辨，而不是包住 web 服务**。官方新版 Search/Fetch API 自己解析 key，用的是 `web-deepseek-api.apiKeyEnv` 指向的凭据；本插件在启动时（以及面板每次保存搜索 key 时）把它指到插件自有的 `DEEPSEEK_API_KEY_SEARCH`，于是只看 ref 就能认出「这是搜索在要 key」：聊天永远不会解析这个 ref。0.2.15 起删掉了原先「把 `ctx.web.search` / `ctx.web.fetch` 包进 `AsyncLocalStorage`」的做法——包住 web 服务可能让 `web_search` / `web_fetch` 一直挂到工具 30/60 秒预算耗尽（连 `http://127.0.0.1:1/` 这种必然立刻失败的地址也一样挂）。规则本身没变：先看会话自己的 key（永远最优先），再看该工作区有没有勾「同步搜索 API」，勾了就依次用工作区 key、系统默认 key；没勾时先用插件面板自己持有的搜索默认 ref（若配了），最后才用搜索插件配置的那个 ref。旧版基于 Messages 的搜索仍然走原来的聊天层级，因为那条路线本身就是一次 messages 请求；
 - 会话列表来自 `sessionController` 服务（`list()`，会拆开它 `{items: […]}` 的信封），控件缺失 / 抛错 / 列表为空时再退到宿主 live 会话服务（`ctx.get('sessions').list()`），所以那种情况下面板仍能列出会话；侧栏藏起来的两种会话这里也藏：子代理会话（`origin: 'subagent'` 或带 `parentSession`）和**空会话**（建了但一句话都没发过，侧栏只显示当前开着的那个）。两种都不过滤的话，一个只有 1 个真实会话的工作区会列出 13 个；
 - 不是注册工作区的目录，只有侧栏真的会显示它才会被列出来。这件事宿主判不了：「空会话里只有当前开着的那个算数」是浏览器端才知道的事（`retainedBy.mainView`），所以宿主把这种目录连同每个会话的 `blank` 标记一起发出去，并用 `hiddenBlankDirs` 点名「里面全是空会话」的目录，由浏览器半边套用与侧栏一致的判据；
 - `/wsk-api/state` 会带上插件自身版本与会话探针（`available`、`shape`、`source`、`count`、`withoutCwd`、`subagents`、`samples`、`error`，以及工作区路径样本），面板据此说明**为什么**没有列出会话：宿主半边是旧版本（只刷新了页面而没重启应用）、没有 `sessionController`、`list()` 抛错、信封形状不认识，还是会话的 `cwd` 与任何工作区路径都对不上；
@@ -79,7 +79,7 @@ dsh plugin --profile web add dsh-workspace-api-key
 pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api-key
 ```
 
-锁版本用 `dsh-workspace-api-key@0.2.14`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
+锁版本用 `dsh-workspace-api-key@0.2.15`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
 
 然后把 `"dsh-workspace-api-key"` 加进该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH。本地开发用 link 代替：
 
