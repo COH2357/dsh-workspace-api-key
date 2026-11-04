@@ -729,6 +729,8 @@ eq('旧通道：搜索沿用聊天层级的 key', webCalls[0]?.key, 'sk-alpha-12
 // 打开新版 Search/Fetch API（官方开关 = 改 provider 选择）
 webSettings.searchProvider = 'deepseek-search-api'
 webSettings.fetchProvider = 'deepseek-fetch-api'
+// 真实的配置改动会触发 settings/document-updated；测试里直接改对象，就用一次 /state 刷新缓存。
+await callRoute('/state', 'GET')
 webCalls.length = 0
 await web.search({ query: 'api-unsynced' })
 eq('新版通道 + 没勾同步 → 用搜索插件自己的 key', webCalls[0]?.key, 'sk-search-default')
