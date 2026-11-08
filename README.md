@@ -26,6 +26,7 @@ session key  →  workspace key  →  system default
 - **A search switch per workspace** — every workspace row carries a `同步搜索 API` checkbox. Ticked, the `web_search` / `web_fetch` calls made by sessions in that directory use the key they would use for chat (`session → workspace → system default`); unticked, they keep the key the official 设置 → 插件 → 网页搜索 page manages. A session with its own key always wins, so "sync on, session configured separately" spends the session key, not the search key.
 - **Search warnings that arrive before the failure** — when a search key is configured but `启用新版 Web 搜索 API` is off, or when the new API is on but its key ref is empty, the panel shows a warning banner and the entering-session overlay says it too, in one line you can act on. The overlay stays quiet about search problems when the search provider is not the one in use.
 - **A usage guide** — `使用说明` at the top of the panel recommends two keys: a chat default (`default`) and a search default (`search-default`), so the two budgets stay separate; it also draws the cascade and lists the situations that trigger a warning.
+- **Language-aware UI** — the panel follows the web GUI language from `@deepseek-ai/dsh-client-locale`: English when the GUI is English, Chinese when it is Chinese. Answers produced by the host half (connection-test details, search warnings) are translated in the browser half, so the panel does not mix languages.
 
 ## How it works
 

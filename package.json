@@ -50,6 +50,6 @@
     "lib/client.js"
   ],
   "scripts": {
-    "test": "node test/host.test.mjs && node test/client.test.mjs"
+    "test": "node test/host.test.mjs && node test/client.test.mjs && node test/client-i18n.test.mjs"
   }
 }
