@@ -335,10 +335,10 @@ const ctx = {
 client.apply(ctx)
 
 console.log('\n[1] 插槽注册')
-eq('注入了三个插槽', registeredCtx.injected.length, 3)
-check('注入 sidebar.panellist / main / shell.overlay',
+eq('注入了四个插槽', registeredCtx.injected.length, 4)
+check('注入 sidebar.panellist / main / shell.overlay / settings.section',
   registeredCtx.injected.includes('sidebar.panellist') && registeredCtx.injected.includes('main')
-    && registeredCtx.injected.includes('shell.overlay'),
+    && registeredCtx.injected.includes('shell.overlay') && registeredCtx.injected.includes('settings.section'),
   JSON.stringify(registeredCtx.injected))
 const row = registrations.find((r) => r.options.name === 'sidebar.panellist')
 const page = registrations.find((r) => r.options.name === 'main')
@@ -1082,6 +1082,27 @@ searchState = {
   warnings: [],
 }
 searchSyncPaths = []
+await mount(page)
+
+console.log('\n[31] 设置页里的「API Key 分配」一栏（侧栏图标被取消固定后的兜底入口）')
+const settingsEntry = registrations.find((r) => r.options.name === 'settings.section')
+check('注册了 settings.section', settingsEntry !== undefined)
+eq('设置栏 id 与面板一致', settingsEntry?.options.id, 'workspace-api-key')
+eq('设置栏标签', settingsEntry?.options.label?.(), 'API Key 分配')
+resetHooks()
+activeOverlay = null
+tree = null
+activePage = settingsEntry
+pageProps = {}
+try { rerenderAll() } catch (err) { check('设置栏渲染不报错', false, String(err?.message ?? err)) }
+const settingsText = textOf(tree)
+check('设置栏说明「更多」菜单里还能找到面板', settingsText.includes('更多'), settingsText.slice(0, 200))
+check('设置栏说明刷新会恢复固定', settingsText.includes('Ctrl+R'), settingsText.slice(0, 200))
+const openButton = flatten(tree).find((n) => n.type === 'button' && textOf(n).includes('打开 API Key 分配面板'))
+check('设置栏有「打开面板」按钮', openButton !== undefined)
+registeredCtx.lastPanel = 'sentinel'
+if (openButton !== undefined) openButton.props.onClick()
+eq('按钮切到了本插件的面板', registeredCtx.lastPanel, 'workspace-api-key')
 await mount(page)
 check('每个目录都渲染「同步搜索 API」复选框', textOf(tree).includes('同步搜索 API'), textOf(tree).slice(0, 400))
 eq('复选框数量 = 工作区 + 未分组目录', flatten(tree).filter((n) => n.type === 'input' && n.props?.type === 'checkbox').length, 3)

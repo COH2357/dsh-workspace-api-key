@@ -26,6 +26,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - **每个工作区一个搜索开关** —— 每个工作区行上都有「同步搜索 API」复选框。勾选后，该目录下会话发出的 `web_search` / `web_fetch` 请求改用它们聊天时用的那把 key（会话 → 工作区 → 系统默认）；不勾选则继续用官方「设置 → 插件 → 网页搜索」里配置的那把 key。会话自己配了 key 时永远优先，所以「工作区同步、会话单独设置」花的是会话那把 key，而不是搜索默认 key。
 - **在失败之前就提醒的搜索告警** —— 配了搜索 key 但没打开「启用新版 Web 搜索 API」，或者新版 API 打开了但它的 key ref 是空的，面板会显示提醒条，点进会话时的覆盖层也会用一句可直接照做的话说明；当生效的搜索通道不是新版 API 时，覆盖层不会拿搜索问题打扰你。
 - **使用说明** —— 面板顶部有「使用说明」，推荐两把 key 分工：聊天默认用 `default`，搜索默认用 `search-default`，两份预算互不干扰；里面还画了层级，并列出了会触发提醒的几种情况。
+- **面板入口也能从设置里找回来** —— 「设置 → API Key 分配」里还有一个「打开 API Key 分配面板」按钮：侧栏图标被取消固定时，点它就能回到这里；那里也写明了「更多」菜单和刷新页面两条找回途径。
 - **界面跟随 DSH 语言** —— 面板跟随 `@deepseek-ai/dsh-client-locale`：Web 界面是英文时显示英文，是中文时保持中文；宿主半边返回的提示（连接测试详情、搜索提醒）也在浏览器半边翻译，界面不会中英混排。
 
 ## 实现方式
@@ -80,7 +81,7 @@ dsh plugin --profile web add dsh-workspace-api-key
 pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api-key
 ```
 
-锁版本用 `dsh-workspace-api-key@0.2.16`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
+锁版本用 `dsh-workspace-api-key@0.2.17`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
 
 然后把 `"dsh-workspace-api-key"` 加进该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH。本地开发用 link 代替：
 
@@ -92,7 +93,7 @@ pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api
 
 ```sh
 node test/host.test.mjs     # 177 条断言
-node test/client.test.mjs   # 173 条断言
+node test/client.test.mjs   # 180 条断言
 ```
 
 两个套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`sessions`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘，以及会话探针（含 `{items}` 信封与 live 兜底）。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、宿主列不出会话时从浏览器端存储恢复会话（标题取 `displayTitle`、隐藏子代理会话与空会话、浏览器端只认识一部分会话时不挤掉宿主行）、会话列表服务晚于插件提供时的重试、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。宿主套件还带一个假的 `web` 服务与假的设置服务，验证搜索作用域：旧通道沿用聊天层级、新版通道用它自己的 key、工作区开关接管、会话 key 压过两者、面板自己的搜索默认 key 生效与清除、三类搜索提醒，以及搜索连接测试。浏览器套件覆盖搜索相关界面：每个工作区行的「同步搜索 API」复选框、它发出的 `/wsk-api/search-sync`、提醒条与「使用说明」弹窗。
