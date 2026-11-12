@@ -25,9 +25,19 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - **接管官方搜索 key 设置（先有 key 才接管）** —— 启动时若已启用新版 Web 搜索 API，插件把官方 `web-deepseek-api` / `web-search-deepseek` 条目的 `apiKeyEnv` 指到 `DEEPSEEK_API_KEY_SEARCH`（只改这一个指向，永远不动 key 内容）。此后「设置 → 插件 → 网页搜索」里填的就是本面板这把搜索 key，既不会再顶掉聊天 key，也不存在第二处藏搜索 key 的地方。还没配搜索 key 时，官方条目继续指着聊天那把，所以升级不会让 `web_search` 直接失效，面板会如实提醒「搜索暂时和聊天共用一把 key」。
 - **每个工作区一个搜索开关** —— 每个工作区行上都有「同步搜索 API」复选框。勾选后，该目录下会话发出的 `web_search` / `web_fetch` 请求改用它们聊天时用的那把 key（会话 → 工作区 → 系统默认）；不勾选则继续用官方「设置 → 插件 → 网页搜索」里配置的那把 key。会话自己配了 key 时永远优先，所以「工作区同步、会话单独设置」花的是会话那把 key，而不是搜索默认 key。
 - **在失败之前就提醒的搜索告警** —— 配了搜索 key 但没打开「启用新版 Web 搜索 API」，或者新版 API 打开了但它的 key ref 是空的，面板会显示提醒条，点进会话时的覆盖层也会用一句可直接照做的话说明；当生效的搜索通道不是新版 API 时，覆盖层不会拿搜索问题打扰你。
+- *（上面四条搜索能力只适用于旧版宿主。DSH >= `0.2.2-rc.2` 把搜索/获取改成了「计费方式」，旧字段不再生效；新版宿主上的行为见「宿主版本兼容」。）*
 - **使用说明** —— 面板顶部有「使用说明」，推荐两把 key 分工：聊天默认用 `default`，搜索默认用 `search-default`，两份预算互不干扰；里面还画了层级，并列出了会触发提醒的几种情况。
 - **面板入口也能从设置里找回来** —— 「设置 → API Key 分配」里还有一个「打开 API Key 分配面板」按钮：侧栏图标被取消固定时，点它就能回到这里；那里也写明了「更多」菜单和刷新页面两条找回途径。
 - **界面跟随 DSH 语言** —— 面板跟随 `@deepseek-ai/dsh-client-locale`：Web 界面是英文时显示英文，是中文时保持中文；宿主半边返回的提示（连接测试详情、搜索提醒）也在浏览器半边翻译，界面不会中英混排。
+
+## 宿主版本兼容（0.3.0 起）
+
+插件按**宿主能力**切换界面，不猜版本号：`web-deepseek-api` 的设置里出现 `searchBilling` / `fetchBilling` 字段，就按新版宿主（DSH >= `0.2.2-rc.2`）处理，否则按旧版处理。
+
+- **新版宿主**：主面板只保留一张「搜索与获取」卡片，说明官方设置页已经接管搜索 key，显示当前的搜索/获取计费方式，并提供「打开官方搜索设置」按钮。旧版的「搜索默认 key」卡片、「同步搜索 API」开关、「搜索生效 key」提示和三类搜索告警全部隐藏——`apiKeyEnv` 在新版里已不再生效，继续展示只会让人误配。计费方式为「DeepSeek API Key」时，搜索解析的是 `DEEPSEEK_API_KEY`，因此会自动跟随上面讲的会话 → 工作区 → 系统默认级联；计费方式为「已登录的 DeepSeek 账号」时走账号令牌，插件无法覆盖，卡片会如实提示。
+- **旧版宿主**：0.2.x 的行为原样保留（搜索默认 key、接管 `apiKeyEnv`、工作区同步开关、搜索告警）。
+- **宿主版本**：`/wsk-api/state` 里的 `hostVersion` 是尽力而为读出来的——从能解析到的 `@deepseek-ai/dsh` 的 `package.json` 取 `version`；桌面版宿主打在 asar 里读不到时返回空，设置页显示「未知」。所以兼容性判断始终以设置字段为准，版本号只用于展示。
+- **实验性「统一搜索 key」**（只在「设置 → API Key 分配」，不放进主面板）：开启后插件把官方 `searchApiKeyEnv` / `fetchApiKeyEnv` 指向 `DEEPSEEK_API_KEY_SEARCH`，并把这把 key 存进凭据服务，于是所有会话、工作区的 `web_search` / `web_fetch` 都用它（优先于会话/工作区 key）；关闭时清空这两个字段，回到官方计费方式。它需要新版宿主，旧版宿主调用会返回 400。
 
 ## 实现方式
 
@@ -38,7 +48,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 - 把该目录与 `workspaceRegistry.list()` 做规范化后比对（绝对化、去掉尾部分隔符、Windows 折大小写）；
 - 由每一层派生出稳定的 ref —— 工作区是 `DEEPSEEK_API_KEY_WS_<sha1(规范化路径) 前 16 位十六进制大写>`，会话是 `DEEPSEEK_API_KEY_SS_<sha1(会话 id) 前 16 位十六进制大写>`（会话 id 含 `-`，不能直接当 ref 名）——通过凭据服务写入 key，并返回这个 ref 的值；
 - 只改写 provider 真正会读的 ref：默认 ref、每个适配器配置的 `apiKeyEnv`，以及插件自己生成的 ref；其它 ref 原样透传；
-- 把「搜索请求」和「聊天请求」分开——**按 ref 分辨，而不是包住 web 服务**。官方新版 Search/Fetch API 自己解析 key，用的是 `web-deepseek-api.apiKeyEnv` 指向的凭据；本插件在启动时（以及面板每次保存搜索 key 时）把它指到插件自有的 `DEEPSEEK_API_KEY_SEARCH`，于是只看 ref 就能认出「这是搜索在要 key」：聊天永远不会解析这个 ref。0.2.15 起删掉了原先「把 `ctx.web.search` / `ctx.web.fetch` 包进 `AsyncLocalStorage`」的做法——包住 web 服务可能让 `web_search` / `web_fetch` 一直挂到工具 30/60 秒预算耗尽（连 `http://127.0.0.1:1/` 这种必然立刻失败的地址也一样挂）。规则本身没变：先看会话自己的 key（永远最优先），再看该工作区有没有勾「同步搜索 API」，勾了就依次用工作区 key、系统默认 key；没勾时先用插件面板自己持有的搜索默认 ref（若配了），最后才用搜索插件配置的那个 ref。旧版基于 Messages 的搜索仍然走原来的聊天层级，因为那条路线本身就是一次 messages 请求；
+- 把「搜索请求」和「聊天请求」分开——**按 ref 分辨，而不是包住 web 服务**。官方新版 Search/Fetch API 自己解析 key，用的是 `web-deepseek-api.apiKeyEnv` 指向的凭据；本插件在启动时（以及面板每次保存搜索 key 时）把它指到插件自有的 `DEEPSEEK_API_KEY_SEARCH`，于是只看 ref 就能认出「这是搜索在要 key」：聊天永远不会解析这个 ref。0.2.15 起删掉了原先「把 `ctx.web.search` / `ctx.web.fetch` 包进 `AsyncLocalStorage`」的做法——包住 web 服务可能让 `web_search` / `web_fetch` 一直挂到工具 30/60 秒预算耗尽（连 `http://127.0.0.1:1/` 这种必然立刻失败的地址也一样挂）。规则本身没变：先看会话自己的 key（永远最优先），再看该工作区有没有勾「同步搜索 API」，勾了就依次用工作区 key、系统默认 key；没勾时先用插件面板自己持有的搜索默认 ref（若配了），最后才用搜索插件配置的那个 ref。旧版基于 Messages 的搜索仍然走原来的聊天层级，因为那条路线本身就是一次 messages 请求。新版计费模型下不再写 `apiKeyEnv`（那是死字段）：`api-key` 计费时搜索解析 `DEEPSEEK_API_KEY`，自然沿着聊天级联走；`account` 计费走账号令牌，插件覆盖不了，只做提示；实验性统一 key 则把 `searchApiKeyEnv` 指到插件自有的 `DEEPSEEK_API_KEY_SEARCH`，并按 ref 分辨、优先返回这把 key；
 - 会话列表来自 `sessionController` 服务（`list()`，会拆开它 `{items: […]}` 的信封），控件缺失 / 抛错 / 列表为空时再退到宿主 live 会话服务（`ctx.get('sessions').list()`），所以那种情况下面板仍能列出会话；侧栏藏起来的两种会话这里也藏：子代理会话（`origin: 'subagent'` 或带 `parentSession`）和**空会话**（建了但一句话都没发过，侧栏只显示当前开着的那个）。两种都不过滤的话，一个只有 1 个真实会话的工作区会列出 13 个；
 - 不是注册工作区的目录，只有侧栏真的会显示它才会被列出来。这件事宿主判不了：「空会话里只有当前开着的那个算数」是浏览器端才知道的事（`retainedBy.mainView`），所以宿主把这种目录连同每个会话的 `blank` 标记一起发出去，并用 `hiddenBlankDirs` 点名「里面全是空会话」的目录，由浏览器半边套用与侧栏一致的判据；
 - `/wsk-api/state` 会带上插件自身版本与会话探针（`available`、`shape`、`source`、`count`、`withoutCwd`、`subagents`、`samples`、`error`，以及工作区路径样本），面板据此说明**为什么**没有列出会话：宿主半边是旧版本（只刷新了页面而没重启应用）、没有 `sessionController`、`list()` 抛错、信封形状不认识，还是会话的 `cwd` 与任何工作区路径都对不上；
@@ -59,6 +69,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 | POST | `/wsk-api/test` | `{scope, path \| sessionId \| ref}`（或 `{key}`）真发一次请求并返回判定；`invalid` 打标记，`ok` 清标记 |
 | POST | `/wsk-api/clear-flag` | `{ref}` 或一个目标，清掉失效/配额标记 |
 | POST | `/wsk-api/search-sync` | `{path, enabled}` —— 打开或关闭某个工作区的「同步搜索 API」 |
+| POST | `/wsk-api/search-unified` | `{enabled, key?}` —— 实验性：把所有会话/工作区的搜索与获取固定到同一把 key；开启时写 `searchApiKeyEnv` / `fetchApiKeyEnv`，关闭时清空 |
 
 只接受本机回环调用（`127.0.0.1`、`::1`、`::ffff:127.0.0.1`），且 `Origin` 必须同源或缺失。任何响应都不会包含明文 key，只有掩码。
 
@@ -81,7 +92,7 @@ dsh plugin --profile web add dsh-workspace-api-key
 pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api-key
 ```
 
-锁版本用 `dsh-workspace-api-key@0.2.17`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
+锁版本用 `dsh-workspace-api-key@0.3.0`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
 
 然后把 `"dsh-workspace-api-key"` 加进该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH。本地开发用 link 代替：
 
@@ -92,16 +103,17 @@ pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api
 ## 测试
 
 ```sh
-node test/host.test.mjs     # 177 条断言
-node test/client.test.mjs   # 180 条断言
+node test/host.test.mjs           # 196 条断言
+node test/client.test.mjs         # 180 条断言
+node test/client-billing.test.mjs # 8 条断言（新版计费模型）
 ```
 
-两个套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`sessions`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘，以及会话探针（含 `{items}` 信封与 live 兜底）。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、宿主列不出会话时从浏览器端存储恢复会话（标题取 `displayTitle`、隐藏子代理会话与空会话、浏览器端只认识一部分会话时不挤掉宿主行）、会话列表服务晚于插件提供时的重试、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。宿主套件还带一个假的 `web` 服务与假的设置服务，验证搜索作用域：旧通道沿用聊天层级、新版通道用它自己的 key、工作区开关接管、会话 key 压过两者、面板自己的搜索默认 key 生效与清除、三类搜索提醒，以及搜索连接测试。浏览器套件覆盖搜索相关界面：每个工作区行的「同步搜索 API」复选框、它发出的 `/wsk-api/search-sync`、提醒条与「使用说明」弹窗。
+两个主套件都不需要启动 DSH。宿主套件用一个假 ctx（假的 `credentials`、`workspaceRegistry`、`agents`、`sessionController`、`sessions`、`webServer`，以及打桩的 `fetch`）驱动 `apply()`，覆盖 ref 派生、会话→工作区→默认的级联、工作区匹配、把第二个适配器的 `apiKeyEnv` 一起重定向、清回默认、401/402/429/5xx 的判定、回环与来源校验、状态落盘，以及会话探针（含 `{items}` 信封与 live 兜底）。浏览器套件通过一个极小的 `window.__ModuleLoader__` 与自制 React 运行时加载 `lib/client.js`，渲染出面板与覆盖层，断言槽注册、首屏渲染、会话折叠/展开、会话级保存与测试、宿主列不出会话时从浏览器端存储恢复会话（标题取 `displayTitle`、隐藏子代理会话与空会话、浏览器端只认识一部分会话时不挤掉宿主行）、会话列表服务晚于插件提供时的重试、未分组目录卡片、失效与不匹配提醒、「去配置」的交接、没有会话列表时的降级，以及 `ctx.get('layout')` 在插件 apply 之后才可用时返回键仍然有效。宿主套件还带一个假的 `web` 服务与假的设置服务，验证搜索作用域：旧通道沿用聊天层级、新版通道用它自己的 key、工作区开关接管、会话 key 压过两者、面板自己的搜索默认 key 生效与清除、三类搜索提醒，以及搜索连接测试。浏览器套件覆盖搜索相关界面：每个工作区行的「同步搜索 API」复选框、它发出的 `/wsk-api/search-sync`、提醒条与「使用说明」弹窗；`client-billing.test.mjs` 专门验证新版计费模型下面板不再出现旧搜索 UI、只给官方设置入口，以及统一搜索 key 的提示。i18n 套件（`client-i18n.test.mjs`，7 条断言）验证英文字典完整。
 
 ## 要求与限制
 
-- 已在 DSH Desktop 2.0.17（`@deepseek-ai/dsh*` 0.2.0-rc.2、`@deepseek-ai/cordis` 4.0.4）上验证。插件没有运行时依赖，也不 import 任何 `@deepseek-ai/*` 包，只用宿主服务（`credentials`、`workspaceRegistry`、`agents`、`sessionController`、`webServer`、`llm`、`settings`）与 Node 内置模块。
-- 搜索功能依赖自带官方 Search/Fetch API 的 DSH（`web-deepseek-api`，即「设置 → 插件 → 网页搜索」里那个「启用新版 Web 搜索 API」）。没有这个能力的版本上，插件根本收不到搜索请求：开关照旧显示，面板会如实报告当前是旧版 Messages 通道，而不是瞎猜。
+- 已在 DSH Desktop（`@deepseek-ai/dsh*` 0.2.2-rc.2、`@deepseek-ai/cordis` 4.0.4）上验证。插件没有运行时依赖，也不 import 任何 `@deepseek-ai/*` 包，只用宿主服务（`credentials`、`workspaceRegistry`、`agents`、`sessionController`、`webServer`、`llm`、`settings`）与 Node 内置模块。
+- 搜索功能依赖自带官方 Search/Fetch API 的 DSH（`web-deepseek-api`，即「设置 → 插件 → 网页搜索」里那个「启用新版 Web 搜索 API」）。没有这个能力的版本上，插件根本收不到搜索请求：开关照旧显示，面板会如实报告当前是旧版 Messages 通道，而不是瞎猜。新版宿主改用「计费方式」后，`account` 计费走账号令牌，插件无法覆盖，只能提示；需要按会话/工作区 key 计费时请把计费方式设为「DeepSeek API Key」，或使用设置页里的实验性「统一搜索 key」。
 - 每一层只有一把 key：一个会话无论被哪个 provider 路由读取，用的都是同一把 key；key 记下的服务商与会话当前服务商不一致时会被报为「不匹配」，但同一服务商内换模型不算不匹配，因为 DeepSeek key 是账号级的。
 - 会话按目录（`cwd`）归入工作区。宿主自己的 `list()` 会跳过从未存过 `cwd` 的历史会话，而 live 兜底只认识当前装载中的会话，所以面板列出的会话可能比侧栏少；只在浏览器端存储里可见的会话，除了侧栏知道的那个 `cwd` 之外没有别的路径信息。
 - 「测试连接」说的是 Anthropic Messages 协议（`POST <baseURL>/messages` 带 `x-api-key` 与 `anthropic-version: 2023-06-01`），也就是 DeepSeek 路由用的协议；换了别的协议的 provider 一样可以按层绑 key，只是测试可能把有效的 key 报成失败。

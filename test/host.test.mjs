@@ -160,6 +160,11 @@ const webSettings = {
   apiKeyEnv: 'DEEPSEEK_SEARCH_KEY',
   baseURL: 'https://api.deepseek.com/v1/tools',
   count: 10,
+  // 新版宿主（>=0.2.2-rc.2）才有的字段：有值 = 计费模型，插件不再接管 apiKeyEnv。
+  searchBilling: undefined,
+  fetchBilling: undefined,
+  searchApiKeyEnv: undefined,
+  fetchApiKeyEnv: undefined,
 }
 const webCalls = []
 /** 记录插件对官方设置的改写，验证「同步到官方插件」确实发生。 */
@@ -167,12 +172,14 @@ const settingsUpdates = []
 let settingsRevision = 0
 const web = {
   async search(request) {
-    const used = await credentials.resolve(webSettings.apiKeyEnv)
+    // 新版官方 provider 解析的是 searchApiKeyEnv（计费模型下的自有 ref）；
+    // 旧版才直接解析 apiKeyEnv。
+    const used = await credentials.resolve(webSettings.searchApiKeyEnv || webSettings.apiKeyEnv)
     webCalls.push({ kind: 'search', query: request?.query, key: used?.value })
     return { results: [] }
   },
   async fetch(request) {
-    const used = await credentials.resolve(webSettings.apiKeyEnv)
+    const used = await credentials.resolve(webSettings.fetchApiKeyEnv || webSettings.apiKeyEnv)
     webCalls.push({ kind: 'fetch', url: request?.url, key: used?.value })
     return { content: '' }
   },
@@ -211,15 +218,29 @@ const settings = {
       { ns: 'agent-default-model', value: { model: 'deepseek-flash' } },
       // 官方「网页搜索」设置：开关体现为 provider 选择，key 引用在各自命名空间。
       { ns: 'web', value: { searchProvider: webSettings.searchProvider, fetchProvider: webSettings.fetchProvider } },
-      { ns: 'web-deepseek-api', value: { apiKeyEnv: webSettings.apiKeyEnv, baseURL: webSettings.baseURL, count: webSettings.count }, revision: settingsRevision },
+      { ns: 'web-deepseek-api', value: {
+        apiKeyEnv: webSettings.apiKeyEnv,
+        baseURL: webSettings.baseURL,
+        count: webSettings.count,
+        searchBilling: webSettings.searchBilling,
+        fetchBilling: webSettings.fetchBilling,
+        searchApiKeyEnv: webSettings.searchApiKeyEnv,
+        fetchApiKeyEnv: webSettings.fetchApiKeyEnv,
+      }, revision: settingsRevision },
       { ns: 'web-search-deepseek', value: { apiKeyEnv: webSettings.apiKeyEnv }, revision: settingsRevision },
     ]
   },
   /** 插件保存搜索默认 key 时会把官方两套搜索插件的 apiKeyEnv 指过来（volatile 字段）。 */
   async update(ns, patch, expectedRevision) {
     if (expectedRevision !== undefined && expectedRevision !== settingsRevision) throw new Error('settings revision conflict')
-    if (patch?.apiKeyEnv !== undefined) {
-      webSettings.apiKeyEnv = patch.apiKeyEnv
+    let changed = false
+    for (const field of ['apiKeyEnv', 'baseURL', 'count', 'searchBilling', 'fetchBilling', 'searchApiKeyEnv', 'fetchApiKeyEnv']) {
+      if (patch?.[field] !== undefined) {
+        webSettings[field] = patch[field]
+        changed = true
+      }
+    }
+    if (changed) {
       settingsRevision += 1
       settingsUpdates.push({ ns, patch })
     }
@@ -896,6 +917,77 @@ webSettings.fetchProvider = 'http'
 await callRoute('/set', 'POST', { scope: 'session', sessionId: 'session-2', useDefault: true })
 currentCwd = undefined
 currentSession = undefined
+
+// ───────────────────────────── 新版计费模型 ─────────────────────────────
+
+console.log('\n[40] 新版计费模型：特性检测 + 不再接管旧搜索字段')
+webSettings.searchBilling = 'auto'
+webSettings.fetchBilling = 'auto'
+webSettings.searchProvider = 'deepseek-search-api'
+webSettings.fetchProvider = 'deepseek-fetch-api'
+webSettings.apiKeyEnv = 'DEEPSEEK_API_KEY'
+const updatesBeforeState = settingsUpdates.length
+const billingSnap = (await callRoute('/state', 'GET')).body
+eq('snapshot 报 billing 模式', billingSnap.search?.mode, 'billing')
+eq('计费方式透出 search', billingSnap.search?.billing?.search, 'auto')
+eq('计费方式透出 fetch', billingSnap.search?.billing?.fetch, 'auto')
+check('计费模式下不再产生旧版搜索警告',
+  !(billingSnap.search?.warnings ?? []).some((w) => ['search-key-idle', 'search-default-missing', 'search-default-idle', 'search-official-shared'].includes(w.code)),
+  JSON.stringify(billingSnap.search?.warnings))
+eq('计费模式下 /state 没有改写官方设置', settingsUpdates.length, updatesBeforeState)
+
+currentCwd = WS_B
+currentSession = undefined
+webCalls.length = 0
+await web.search({ query: 'billing-api-key' })
+eq('api-key 计费下搜索跟随工作区聊天 key', webCalls[0]?.key, 'sk-beta-workspace-1')
+
+// account 计费：插件无法覆盖账号令牌，只给提示
+webSettings.searchBilling = 'account'
+const accountSnap = (await callRoute('/state', 'GET')).body
+check('account 计费提示无法覆盖',
+  (accountSnap.search?.warnings ?? []).some((w) => w.code === 'search-billing-account'),
+  JSON.stringify(accountSnap.search?.warnings))
+
+// 旧模型（没有 billing 字段）调用统一搜索接口 → 400
+webSettings.searchBilling = undefined
+webSettings.fetchBilling = undefined
+await callRoute('/state', 'GET')
+const unifiedOld = await callRoute('/search-unified', 'POST', { enabled: true, key: 'sk-unified' })
+eq('旧模型下统一搜索接口返回 400', unifiedOld.status, 400)
+eq('旧模型下没有写入 searchApiKeyEnv', webSettings.searchApiKeyEnv, undefined)
+
+// 新模型下开启统一搜索 key
+webSettings.searchBilling = 'api-key'
+webSettings.fetchBilling = 'api-key'
+await callRoute('/state', 'GET')
+const enableUnified = await callRoute('/search-unified', 'POST', { enabled: true, key: 'sk-unified-key' })
+eq('开启统一搜索 key', enableUnified.body.ok, true)
+eq('官方 searchApiKeyEnv 指向插件自有 ref', webSettings.searchApiKeyEnv, 'DEEPSEEK_API_KEY_SEARCH')
+eq('官方 fetchApiKeyEnv 指向插件自有 ref', webSettings.fetchApiKeyEnv, 'DEEPSEEK_API_KEY_SEARCH')
+eq('snapshot 报 unified', enableUnified.body.search?.unified, true)
+webCalls.length = 0
+await web.search({ query: 'unified-search' })
+eq('统一 key 压过工作区聊天 key', webCalls[0]?.key, 'sk-unified-key')
+webCalls.length = 0
+await web.fetch({ url: 'https://example.com' })
+eq('统一 key 也用于 fetch', webCalls[0]?.key, 'sk-unified-key')
+eq('统一搜索不影响聊天通道', (await credentials.resolve('DEEPSEEK_API_KEY'))?.value, 'sk-beta-workspace-1')
+
+const disableUnified = await callRoute('/search-unified', 'POST', { enabled: false })
+eq('关闭统一搜索 key', disableUnified.body.ok, true)
+eq('关闭后清空官方 searchApiKeyEnv', webSettings.searchApiKeyEnv, '')
+eq('关闭后 snapshot unified=false', disableUnified.body.search?.unified, false)
+
+// 复位
+webSettings.searchBilling = undefined
+webSettings.fetchBilling = undefined
+webSettings.searchApiKeyEnv = undefined
+webSettings.fetchApiKeyEnv = undefined
+webSettings.searchProvider = 'deepseek-official'
+webSettings.fetchProvider = 'http'
+webSettings.apiKeyEnv = 'DEEPSEEK_API_KEY'
+currentCwd = undefined
 
 // ───────────────────────────── 收尾 ─────────────────────────────
 
