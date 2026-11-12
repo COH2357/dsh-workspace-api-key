@@ -34,7 +34,7 @@ DSH 只从一个全局凭据 ref（默认 `DEEPSEEK_API_KEY`）解析 DeepSeek k
 
 插件按**宿主能力**切换界面，不猜版本号：`web-deepseek-api` 的设置里出现 `searchBilling` / `fetchBilling` 字段，就按新版宿主（DSH >= `0.2.2-rc.2`）处理，否则按旧版处理。
 
-- **新版宿主**：主面板只保留一张「搜索与获取」卡片，说明官方设置页已经接管搜索 key，显示当前的搜索/获取计费方式，并提供「打开官方搜索设置」按钮。旧版的「搜索默认 key」卡片、「同步搜索 API」开关、「搜索生效 key」提示和三类搜索告警全部隐藏——`apiKeyEnv` 在新版里已不再生效，继续展示只会让人误配。计费方式为「DeepSeek API Key」时，搜索解析的是 `DEEPSEEK_API_KEY`，因此会自动跟随上面讲的会话 → 工作区 → 系统默认级联；计费方式为「已登录的 DeepSeek 账号」时走账号令牌，插件无法覆盖，卡片会如实提示。
+- **新版宿主**：主面板只保留一张「搜索与获取」卡片，说明官方设置页已经接管搜索 key，显示当前的搜索/获取计费方式，并提供「打开官方搜索设置」按钮（点击后切到插件面板的「网页搜索与获取」页）。旧版的「搜索默认 key」卡片、「同步搜索 API」开关、「搜索生效 key」提示和三类搜索告警全部隐藏——`apiKeyEnv` 在新版里已不再生效，继续展示只会让人误配。计费方式为「DeepSeek API Key」时，搜索解析的是 `DEEPSEEK_API_KEY`，因此会自动跟随上面讲的会话 → 工作区 → 系统默认级联；计费方式为「已登录的 DeepSeek 账号」时走账号令牌，插件无法覆盖，卡片会如实提示。
 - **旧版宿主**：0.2.x 的行为原样保留（搜索默认 key、接管 `apiKeyEnv`、工作区同步开关、搜索告警）。
 - **宿主版本**：`/wsk-api/state` 里的 `hostVersion` 是尽力而为读出来的——从能解析到的 `@deepseek-ai/dsh` 的 `package.json` 取 `version`；桌面版宿主打在 asar 里读不到时返回空，设置页显示「未知」。所以兼容性判断始终以设置字段为准，版本号只用于展示。
 - **实验性「统一搜索 key」**（只在「设置 → API Key 分配」，不放进主面板）：开启后插件把官方 `searchApiKeyEnv` / `fetchApiKeyEnv` 指向 `DEEPSEEK_API_KEY_SEARCH`，并把这把 key 存进凭据服务，于是所有会话、工作区的 `web_search` / `web_fetch` 都用它（优先于会话/工作区 key）；关闭时清空这两个字段，回到官方计费方式。它需要新版宿主，旧版宿主调用会返回 400。
@@ -92,7 +92,7 @@ dsh plugin --profile web add dsh-workspace-api-key
 pnpm add dsh-workspace-api-key          # 或者：npm install dsh-workspace-api-key
 ```
 
-锁版本用 `dsh-workspace-api-key@0.3.0`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
+锁版本用 `dsh-workspace-api-key@0.3.1`；直接从仓库装则用 `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key`（git 来源的插件会在安装时现场构建）。
 
 然后把 `"dsh-workspace-api-key"` 加进该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH。本地开发用 link 代替：
 
@@ -113,7 +113,7 @@ node test/client-billing.test.mjs # 8 条断言（新版计费模型）
 ## 要求与限制
 
 - 已在 DSH Desktop（`@deepseek-ai/dsh*` 0.2.2-rc.2、`@deepseek-ai/cordis` 4.0.4）上验证。插件没有运行时依赖，也不 import 任何 `@deepseek-ai/*` 包，只用宿主服务（`credentials`、`workspaceRegistry`、`agents`、`sessionController`、`webServer`、`llm`、`settings`）与 Node 内置模块。
-- 搜索功能依赖自带官方 Search/Fetch API 的 DSH（`web-deepseek-api`，即「设置 → 插件 → 网页搜索」里那个「启用新版 Web 搜索 API」）。没有这个能力的版本上，插件根本收不到搜索请求：开关照旧显示，面板会如实报告当前是旧版 Messages 通道，而不是瞎猜。新版宿主改用「计费方式」后，`account` 计费走账号令牌，插件无法覆盖，只能提示；需要按会话/工作区 key 计费时请把计费方式设为「DeepSeek API Key」，或使用设置页里的实验性「统一搜索 key」。
+- 搜索功能依赖自带官方 Search/Fetch API 的 DSH（`web-deepseek-api`，即「插件 → 网页搜索与获取」里的计费方式设置）。没有这个能力的版本上，插件根本收不到搜索请求：开关照旧显示，面板会如实报告当前是旧版 Messages 通道，而不是瞎猜。新版宿主改用「计费方式」后，`account` 计费走账号令牌，插件无法覆盖，只能提示；需要按会话/工作区 key 计费时请把计费方式设为「DeepSeek API Key」，或使用设置页里的实验性「统一搜索 key」。
 - 每一层只有一把 key：一个会话无论被哪个 provider 路由读取，用的都是同一把 key；key 记下的服务商与会话当前服务商不一致时会被报为「不匹配」，但同一服务商内换模型不算不匹配，因为 DeepSeek key 是账号级的。
 - 会话按目录（`cwd`）归入工作区。宿主自己的 `list()` 会跳过从未存过 `cwd` 的历史会话，而 live 兜底只认识当前装载中的会话，所以面板列出的会话可能比侧栏少；只在浏览器端存储里可见的会话，除了侧栏知道的那个 `cwd` 之外没有别的路径信息。
 - 「测试连接」说的是 Anthropic Messages 协议（`POST <baseURL>/messages` 带 `x-api-key` 与 `anthropic-version: 2023-06-01`），也就是 DeepSeek 路由用的协议；换了别的协议的 provider 一样可以按层绑 key，只是测试可能把有效的 key 报成失败。

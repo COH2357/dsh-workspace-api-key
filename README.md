@@ -34,7 +34,7 @@ session key  →  workspace key  →  system default
 
 The plugin switches on **host capability**, not on a parsed version: if the `web-deepseek-api` settings row contains `searchBilling` / `fetchBilling`, the host is the new one (DSH >= `0.2.2-rc.2`); otherwise the old behaviour applies.
 
-- **New host**: the main panel keeps a single "搜索与获取" card that explains the official settings page owns the search key, shows the current search/fetch billing mode, and offers an "打开官方搜索设置" button. The old "搜索默认 key" card, the "同步搜索 API" switch, the effective-search-key hint, and all three search warnings are hidden — `apiKeyEnv` no longer takes effect on this host, so showing them would only invite misconfiguration. With "DeepSeek API Key" billing, search resolves `DEEPSEEK_API_KEY` and therefore follows the session → workspace → default cascade automatically; with "已登录的 DeepSeek 账号" billing it uses the account token, which the plugin cannot override, and the card says so.
+- **New host**: the main panel keeps a single "搜索与获取" card that explains the official settings page owns the search key, shows the current search/fetch billing mode, and offers an "打开官方搜索设置" button that switches to the 插件 → 网页搜索与获取 page. The old "搜索默认 key" card, the "同步搜索 API" switch, the effective-search-key hint, and all three search warnings are hidden — `apiKeyEnv` no longer takes effect on this host, so showing them would only invite misconfiguration. With "DeepSeek API Key" billing, search resolves `DEEPSEEK_API_KEY` and therefore follows the session → workspace → default cascade automatically; with "已登录的 DeepSeek 账号" billing it uses the account token, which the plugin cannot override, and the card says so.
 - **Old host**: the 0.2.x behaviour is unchanged (search default key, `apiKeyEnv` takeover, per-workspace sync switch, search warnings).
 - **Host version**: `hostVersion` in `/wsk-api/state` is best-effort — the plugin reads the `version` of a resolvable `@deepseek-ai/dsh` package.json; the desktop host is packed inside app.asar, so when it cannot be resolved the Settings card shows an unknown version. Capability detection, not the version string, drives behaviour.
 - **Experimental "unified search key"** (Settings → API Key 分配 only, never in the main panel): when enabled, the plugin points the official `searchApiKeyEnv` / `fetchApiKeyEnv` at `DEEPSEEK_API_KEY_SEARCH` and stores that one key, so every session and workspace uses it for `web_search` / `web_fetch` (ahead of session/workspace keys); disabling clears both fields and returns to the official billing mode. It requires the new host — an old host answers the request with 400.
@@ -92,7 +92,7 @@ The command forwards its arguments to pnpm inside the profile directory, so the 
 pnpm add dsh-workspace-api-key          # or: npm install dsh-workspace-api-key
 ```
 
-Pin a version with `dsh-workspace-api-key@0.3.0`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
+Pin a version with `dsh-workspace-api-key@0.3.1`, or install straight from the repository with `dsh-workspace-api-key@github:COH2357/dsh-workspace-api-key` (a git-hosted plugin is built from source on install).
 
 Then add `"dsh-workspace-api-key"` to `dsh.profile.bundles` in that profile's `package.json` and restart DSH. For local development, use a link instead:
 
